@@ -1,0 +1,57 @@
+# このファイルは **データ** であり、コードではない (設計書 §9)。
+# process transport は「stdin を受け取り stdout にテキストを返す非対話コマンド」なら
+# 何でも Reviewer にできる汎用機構で、プリセットはその省略記法にすぎない。
+# preset を使わず command を直接書いても、まったく同じように動く。
+#
+# 上書き: ~/.config/security-checker/presets/process/copilot.yml に同名で置けば、こちらが使われる。
+#
+# 採否は §9.7 の客観条件のみで判断している (順位づけ・推奨ではない):
+#   1. 非対話モードがある                        -> 標準入力へのパイプ (-p と同じく応答して終了する)
+#   2. ツール実行・書き込みを無効化する手段がある -> --deny-tool で権限の種類ごとに全部拒否する
+#   3. 出力を標準出力から取得できる              -> -s (応答だけを出力する)
+#   4. 自動化利用が規約で明示的に禁止されていない -> 公式ドキュメントに Actions での利用手順がある
+#
+# 参照した公式ドキュメント (2026-10-31 時点):
+#   - https://docs.github.com/en/copilot/how-tos/copilot-cli/automate-copilot-cli/run-cli-programmatically
+#   - https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference
+#   - https://docs.github.com/en/copilot/how-tos/copilot-cli/use-copilot-cli-in-actions
+#
+# 認証はコマンド側に委ねる。COPILOT_GITHUB_TOKEN → GH_TOKEN → GITHUB_TOKEN の順に読まれる。
+# GitHub Actions では、workflow に `permissions: copilot-requests: write` を付ければ
+# 組み込みの GITHUB_TOKEN で動き、PAT もシークレットも要らない (docs/providers.md)。
+#
+# 引数の解釈: 1.0.105 (GitHub Copilot CLI) / 2026-10-31。認証つきの実行は未確認。
+name: copilot
+command:
+  - copilot
+  # プロンプトは標準入力から渡す (prompt_via: stdin)。-p を付けると標準入力が無視されるため付けない。
+  # パイプ入力は -p と同じ非対話モードで、応答を出力して終了する。
+  - "-s" # 応答だけを出力し、使用量などの統計を出さない
+  - "--no-ask-user" # 利用者への質問ツールを無効化する
+  # 権限の種類ごとにツールを全部拒否する。拒否は --allow-all より優先される。
+  # ツール名ではなく種類で指定するので、ツールが増えても漏れにくい。
+  - "--deny-tool=shell"
+  - "--deny-tool=write"
+  - "--deny-tool=read"
+  - "--deny-tool=url"
+  - "--deny-tool=memory"
+  - "--disable-builtin-mcps" # 同梱の MCP サーバ (github-mcp-server) も読み込まない
+  # 利用者・リポジトリの AGENTS.md などを読まない。手元の設定に左右されないため。
+  - "--no-custom-instructions"
+  - "--no-auto-update" # 実行中に CLI を更新しない (版を固定するため)
+  - "--no-color"
+  - "--stream=off"
+prompt_via: stdin
+parse: json_in_stdout
+
+capabilities:
+  # process transport の構造化出力は常に prompt_only (§9.7)。
+  # 応答から最初の JSON オブジェクトを抽出し、壊れていれば 1 回だけ修復を試みる。
+  structured_output: prompt_only
+  # 実際の上限はモデルによって変わる。設定側の capabilities で上書きできる。
+  max_context_tokens: 128000
+  max_output_tokens: 8192
+
+# §9.7 の安全要件を満たしていることの申告。
+# これが true の場合に限り、起動時の「書き込み能力の無効化は利用者の責任」警告を出さない。
+requires_readonly_flags: true

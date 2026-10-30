@@ -174,6 +174,62 @@ reviewers:
 名前で呼べるようになります。**PR は不要です。** 他の人にも役立つなら、そのまま PR もできます
 （採否基準は [CONTRIBUTING.md](../CONTRIBUTING.md)）。
 
+### GitHub Actions で組み込みの `GITHUB_TOKEN` を使う（`copilot` プリセット）
+
+GitHub Copilot CLI は、GitHub Actions の組み込みトークン `GITHUB_TOKEN` で認証できます。
+workflow に `copilot-requests: write` の権限を付ければ、**PAT もリポジトリのシークレットも要りません。**
+トークンはジョブごとに発行され、短時間で失効します。
+
+| リポジトリの持ち主 | 課金先 | 必要な設定 |
+|---|---|---|
+| 個人 | リポジトリの持ち主の Copilot シート | `copilot-requests: write` のみ |
+| Organization | Organization | 上に加えて、Organization の Copilot ポリシー「Allow use of Copilot CLI billed to the organization」 |
+
+```yaml
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write    # PR コメント
+      security-events: write  # SARIF のアップロード
+      copilot-requests: write # Copilot CLI を GITHUB_TOKEN で使う
+    steps:
+      - uses: actions/checkout@<SHA> # vX.Y.Z
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@<SHA> # vX.Y.Z
+      - run: npm install -g @github/copilot@<版>   # 版を固定する
+      - uses: Sh1n1230/security-checker@<SHA> # vX.Y.Z
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+```
+
+```yaml
+# security-checker.yml
+reviewers:
+  - name: copilot
+    transport: process
+    preset: copilot
+```
+
+- `GITHUB_TOKEN` での認証には新しめの Copilot CLI が必要です。古い版では認証に失敗します。
+- Copilot CLI は `COPILOT_GITHUB_TOKEN` → `GH_TOKEN` → `GITHUB_TOKEN` の順にトークンを探します。
+  ジョブで `GH_TOKEN` に PAT を入れていると、そちらが使われます。
+- 同じ手順で PAT（Copilot Requests の権限つき）を `COPILOT_GITHUB_TOKEN` に渡すこともできます。
+  この場合の課金先は PAT を作ったユーザーです。
+- fork からの PR では LLM レビューを行いません（[github-actions.md](github-actions.md) の §5）。
+  GitHub も、fork の PR を起点とする workflow はプロンプトインジェクションの危険が高いと注意しています。
+- 公式の推奨は、Copilot CLI を `run` で直接呼ぶより GitHub Agentic Workflows を使うことです。
+  security-checker はプリセットのフラグでツールを全部拒否し、空の一時ディレクトリで起動するため、
+  直接呼ぶ形でも Reviewer が書き込みや実行をできないようにしています。
+
+出典（2026-10-31 に確認）:
+[Using Copilot CLI in GitHub Actions with GITHUB_TOKEN](https://docs.github.com/en/copilot/how-tos/copilot-cli/use-copilot-cli-in-actions)、
+[Copilot CLI in GitHub Actions](https://docs.github.com/en/copilot/concepts/agent-capabilities/agent-powered-workflows-and-operations/copilot-cli-in-github-actions)、
+[GitHub Copilot CLI command reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference)
+
 ### 安全性（transport の性質によらず守るもの）
 
 起動対象は任意のコマンドで、その中にはファイルを書き換える能力を持つものが含まれます。
@@ -239,6 +295,7 @@ security-checker init --local --command '<your-command> --非対話 --ツール�
 |---|---|---|
 | `http` | `openai` | `openai_chat` 方言 / `OPENAI_API_KEY` |
 | `process` | `claude` | 非対話 + ツール全無効で起動 / 認証はそのコマンド側の既存ログイン |
+| `process` | `copilot` | 非対話 + ツールを権限の種類ごとに全拒否で起動 / 認証はそのコマンド側の既存ログインか `GITHUB_TOKEN` など |
 
 アルファベット順です。順位づけ・推奨マークはありません。既定値にもなっていません。
 一覧に無いものも、`command` や `base_url` を直接書けば同じように動きます。

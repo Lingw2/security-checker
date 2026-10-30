@@ -41,6 +41,8 @@ jobs:
 - 設定はリポジトリ直下の `security-checker.yml` を読みます (`security-checker init` で生成)。
 - 設定に `reviewers` が無ければ、LLM を使わずスキャンだけを行います (`review: auto`)。
 - `env` には、設定の `api_key_env` で参照している変数**だけ**を渡してください。
+- API キーを使わず、組み込みの `GITHUB_TOKEN` で Copilot CLI を Reviewer にすることもできます
+  ([providers.md](providers.md) の「GitHub Actions で組み込みの `GITHUB_TOKEN` を使う」)。
 - action はタグではなくコミット SHA で固定してください。タグは後から付け替えられます。
 
 ## 2. 入力

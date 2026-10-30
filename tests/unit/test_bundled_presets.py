@@ -128,3 +128,27 @@ def test_bundled_http_preset_supplies_dialect_and_base_url():
         presets=presets,
     )
     assert provider.base_url == preset.base_url
+
+
+def test_copilot_preset_reads_the_prompt_from_stdin():
+    """`-p` を付けると標準入力が無視され、レビュー対象が渡らない.
+
+    プロンプトを argv に埋め込まない (§9.7 の 3) ためにも、`-p` / `--prompt` を含めない。
+    """
+    preset = bundled_process()["copilot"]
+    assert preset.prompt_via == "stdin"
+    for arg in preset.command:
+        assert arg not in ("-p", "-i") and not arg.startswith(("--prompt", "--interactive")), arg
+
+
+def test_copilot_preset_denies_every_permission_kind():
+    """採否条件 2 の担保. 拒否はツール名ではなく権限の種類で指定する (§9.7).
+
+    種類のどれかが抜けると、その種類のツールは非対話モードの既定の挙動に委ねられる。
+    """
+    command = bundled_process()["copilot"].command
+    for kind in ("shell", "write", "read", "url", "memory"):
+        assert f"--deny-tool={kind}" in command, kind
+    for flag in ("--disable-builtin-mcps", "--no-custom-instructions", "--no-ask-user", "-s"):
+        assert flag in command, flag
+    assert not any(arg.startswith(("--allow-", "--yolo")) for arg in command)
