@@ -397,7 +397,7 @@ class Candidate(BaseModel, frozen=True):
     redacted: bool = False        # 値マスキングを適用したか
 
 class Location(BaseModel, frozen=True):
-    path: str                     # リポジトリルートからの相対パス(絶対パス禁止)
+    path: str                     # 検査対象からの相対パス(絶対パス禁止)。ルートからのパスは出力時に組み立てる
     start_line: int
     end_line: int
     snippet: str | None           # マスキング後
@@ -1920,6 +1920,8 @@ Reviewers: `alpha`, `beta` · Aggregation: consensus (2 of 2)
 
 - `inline_min_status` 以上(既定 `likely`)の Finding のみ、該当行にコメントする。
 - **diff に含まれる行にしかコメントできない**ため、範囲外の Finding はサマリのみに出す。
+  行番号は PR の head の行番号である。`pull_request` は merge コミットを検査するので、
+  `git diff <head> HEAD` で head の行に直す。base 側の変更と重なって対応の取れない行は推測せず、警告に出す。
 - `max_inline_comments`(既定 20)で上限を設ける。超過分はサマリにまとめる。
 - 同一 fingerprint に対して既にコメントが存在する場合は**再投稿しない**。
   push のたびに同じ指摘が積み上がるのが、この種のツールが嫌われる最大の理由。

@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -166,6 +166,77 @@ def compute_diff(root: Path, base: str) -> DiffScope:
     )
     added, changed = parse_unified_diff(text)
     return DiffScope(base=base, added=added, changed_files=frozenset(changed))
+
+
+def repo_prefix(root: Path) -> str | None:
+    """検査対象のリポジトリ内の接頭辞 (例: `services/api/`). git 管理外なら None.
+
+    候補のパスは検査対象からの相対だが、SARIF と PR の files API はルートからの相対で読む。
+    """
+    try:
+        return _git(root, "rev-parse", "--show-prefix").strip()
+    except DiffError:
+        return None
+
+
+#: 検査した行番号 → PR の head の行番号. 対応が取れなければ None
+LineMapper = Callable[[str, int], int | None]
+
+_DIFF_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", re.MULTILINE)
+
+
+def map_line_to_head(diff_text: str, line: int) -> int | None:
+    """`git diff -U0 <head> HEAD` の結果を使い、HEAD の行番号を head の行番号に直す.
+
+    base 側の変更で増えた行は head に存在しないので None を返す (推測しない)。
+    """
+    offset = 0
+    for match in _DIFF_HUNK_RE.finditer(diff_text):
+        old_count = int(match.group(2)) if match.group(2) is not None else 1
+        new_start = int(match.group(3))
+        new_count = int(match.group(4)) if match.group(4) is not None else 1
+        if line < new_start:
+            break
+        if line < new_start + new_count:
+            return None
+        offset += new_count - old_count
+    return line - offset
+
+
+def head_line_mapper(root: Path, head_sha: str | None) -> LineMapper | None:
+    """HEAD が PR の head と違うとき (pull_request の merge コミット) の行の対応表を作る.
+
+    同じコミットを検査したなら None を返す。比較できないときは `DiffError` を投げる。
+    パスはリポジトリルートからの相対で受け取る。
+    """
+    if head_sha is None:
+        return None
+    try:
+        current = _git(root, "rev-parse", "HEAD").strip()
+    except DiffError:
+        return None  # git 管理外. 手元で report.json からコメントする場合など
+    if current == head_sha:
+        return None
+    toplevel = Path(_git(root, "rev-parse", "--show-toplevel").strip())
+    _git(toplevel, "rev-parse", "--verify", f"{head_sha}^{{commit}}")
+    cache: dict[str, str] = {}
+
+    def to_head(path: str, line: int) -> int | None:
+        if path not in cache:
+            cache[path] = _git(
+                toplevel,
+                "diff",
+                "--unified=0",
+                "--no-color",
+                "--no-ext-diff",
+                head_sha,
+                "HEAD",
+                "--",
+                f":(top,literal){path}",
+            )
+        return map_line_to_head(cache[path], line)
+
+    return to_head
 
 
 Mode = Literal["auto", "full", "diff"]

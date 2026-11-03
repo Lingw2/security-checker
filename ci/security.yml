@@ -24,6 +24,12 @@ on:
   # 導入直後に全件を一度出すとき (docs/adoption.md)
   workflow_dispatch:
 
+# 同じ PR の実行を重ねない。重なるとサマリコメントと inline コメントが二重にできる。
+# main への push は取り消さない (前のコミットの結果が残らなくなる)
+concurrency:
+  group: security-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 

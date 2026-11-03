@@ -105,6 +105,9 @@ class TargetInfo(BaseModel):
     changed_files: int | None = None
     #: diff モードの比較基準 (例: origin/main)
     base: str | None = None
+    #: リポジトリルートから検査対象までの接頭辞 (例: `services/api/`)。
+    #: Location.path は検査対象からの相対なので、SARIF と inline コメントでだけ前に付ける
+    repo_prefix: str = ""
 
     @property
     def label(self) -> str:

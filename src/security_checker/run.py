@@ -23,7 +23,7 @@ from security_checker.config.schema import BudgetConfig, Config, ReviewerConfig
 from security_checker.context.builder import ContextBuilder
 from security_checker.context.facts import collect_repo_facts
 from security_checker.errors import ConfigError
-from security_checker.github.pr import DiffScope
+from security_checker.github.pr import DiffScope, repo_prefix
 from security_checker.ids import new_run_id
 from security_checker.language import resolve_language
 from security_checker.models.candidate import Candidate
@@ -148,15 +148,30 @@ def _suppress(
     return kept, suppressed
 
 
+def _location_warning(config: Config, root: Path) -> list[str]:
+    """SARIF の位置はリポジトリルートからのパスなので、ルートが分からないなら伝える."""
+    if "sarif" in config.output.formats and repo_prefix(root) is None:
+        return [
+            "検査対象が git 管理外のため、SARIF のパスは検査対象からの相対になります。"
+            "リポジトリのサブディレクトリなら、Code Scanning の alert がファイルに結び付きません"
+        ]
+    return []
+
+
 def _scope(
     candidates: list[Candidate], root: Path, diff: DiffScope | None
 ) -> tuple[list[Candidate], list[Candidate], TargetInfo]:
     """diff モードなら変更に関係する候補だけに絞る (§7.4)."""
+    prefix = repo_prefix(root) or ""
     if diff is None:
-        return candidates, [], TargetInfo(root=str(root), mode="full")
+        return candidates, [], TargetInfo(root=str(root), mode="full", repo_prefix=prefix)
     inside, outside = diff.split(candidates)
     target = TargetInfo(
-        root=str(root), mode="diff", changed_files=len(diff.changed_files), base=diff.base
+        root=str(root),
+        mode="diff",
+        changed_files=len(diff.changed_files),
+        base=diff.base,
+        repo_prefix=prefix,
     )
     return inside, outside, target
 
@@ -303,6 +318,10 @@ async def run_scan(
         untrusted_target=suppression is not None and suppression.untrusted_target,
     )
     active, suppressed = _suppress(dedupe_and_sort(results), suppression, warnings)
+    warnings.extend(
+        ReportWarning(level="warn", source="config", message=message)
+        for message in _location_warning(config, root)
+    )
     candidates, outside, target = _scope(active, root, diff)
     score = compute_score(candidates, runs)
     coverage = _coverage(runs, candidates, reviewed=0)
@@ -446,6 +465,10 @@ async def run_review(
         untrusted_target=suppression is not None and suppression.untrusted_target,
     )
     active, suppressed = _suppress(dedupe_and_sort(results), suppression, warnings)
+    warnings.extend(
+        ReportWarning(level="warn", source="config", message=message)
+        for message in _location_warning(config, root)
+    )
     candidates, outside, target = _scope(active, root, diff)
 
     setup = reviewer_setup or build_reviewers(config, price_table=price_table, environ=environ)

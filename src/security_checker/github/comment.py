@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 
 from security_checker.config.schema import GithubConfig
@@ -24,6 +24,10 @@ from security_checker.models.finding import Finding
 from security_checker.models.report import Report
 from security_checker.report import sanitize as md
 
+#: 重複したサマリの古いほうに書く本文. マーカーを含めないので、以後は更新の対象にならない
+STALE_SUMMARY = (
+    "このコメントは古い結果です。最新の結果は、この PR の新しいサマリコメントを見てください。"
+)
 SUMMARY_MARKER = "<!-- security-checker:summary:v2 -->"
 FINDING_MARKER_PREFIX = "<!-- security-checker:finding:"
 _FINDING_MARKER_RE = re.compile(r"^<!-- security-checker:finding:([A-Za-z0-9-]+) -->")
@@ -330,6 +334,8 @@ class InlinePlan:
     already_posted: int = 0
     outside_diff: int = 0
     over_limit: int = 0
+    #: base 側の変更と重なり、PR の head の行に対応づけられなかった件数
+    unmapped: int = 0
 
 
 def plan_inline(
@@ -337,10 +343,15 @@ def plan_inline(
     settings: GithubConfig,
     commentable: Mapping[str, Iterable[tuple[int, int]]],
     posted_ids: set[str],
+    *,
+    to_head: Callable[[str, int], int | None] | None = None,
 ) -> InlinePlan:
     """inline コメントの投稿計画を立てる (§21.3).
 
     `commentable` は PR の diff に含まれる新しい側の行範囲 (GitHub は範囲外に付けられない)。
+    パスはリポジトリルートから、行番号は PR の head の行番号で数える。
+    `to_head` は検査した行番号を head の行番号に直す。base 側の変更と重なって対応の取れない行は
+    推測せず `unmapped` に数える。
     """
     plan = InlinePlan()
     if not settings.inline_comments:
@@ -363,9 +374,16 @@ def plan_inline(
         if finding.candidate.id in posted_ids:
             plan.already_posted += 1
             continue
+        path = report.target.repo_prefix + location.path
         line = max(location.end_line, location.start_line, 1)
         start = max(location.start_line, 1)
-        spans = ranges.get(location.path, [])
+        if to_head is not None:
+            head_start, head_line = to_head(path, start), to_head(path, line)
+            if head_start is None or head_line is None:
+                plan.unmapped += 1
+                continue
+            start, line = head_start, head_line
+        spans = ranges.get(path, [])
         # 範囲内でいちばん下の行に付ける (複数行の指摘でも、変更行に乗るように)
         anchor = next(
             (
@@ -383,7 +401,7 @@ def plan_inline(
             continue
         plan.comments.append(
             InlineComment(
-                path=location.path,
+                path=path,
                 line=anchor,
                 body=render_inline(finding),
                 finding_id=finding.candidate.id,

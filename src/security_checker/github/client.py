@@ -19,6 +19,7 @@ import httpx
 from security_checker.config.schema import GithubConfig
 from security_checker.errors import ConfigError, SecurityCheckerError
 from security_checker.github.comment import (
+    STALE_SUMMARY,
     SUMMARY_MARKER,
     commentable_ranges,
     existing_finding_ids,
@@ -26,6 +27,7 @@ from security_checker.github.comment import (
     plan_inline,
     render_summary,
 )
+from security_checker.github.pr import DiffError, head_line_mapper
 from security_checker.models.report import Report
 
 DEFAULT_API_URL = "https://api.github.com"
@@ -188,6 +190,7 @@ class CommentResult:
     inline_already_posted: int = 0
     inline_outside_diff: int = 0
     inline_over_limit: int = 0
+    inline_unmapped: int = 0
     warnings: list[str] = field(default_factory=list)
 
 
@@ -268,7 +271,16 @@ def _post_summary(
             settings.comment_author,
             lambda body: body.startswith(SUMMARY_MARKER),
         )
-        existing = next(iter(ours), None)
+        # 実行が重なると複数できる。最新を更新し、残りは古い結果だと書く。
+        # 人の返信がぶら下がっている可能性があるので消さない
+        existing = ours[-1] if ours else None
+        for stale in ours[:-1]:
+            client.update_issue_comment(pr, int(stale["id"]), STALE_SUMMARY)
+        if len(ours) > 1:
+            result.warnings.append(
+                f"サマリコメントが {len(ours)} 件ありました。実行が重なった可能性があります。"
+                "workflow に concurrency を設定してください (docs/github-actions.md)"
+            )
         if foreign:
             result.warnings.append(_foreign_warning(foreign, "サマリ", settings.comment_author))
 
@@ -309,13 +321,28 @@ def _post_inline(
             _foreign_warning(foreign, "inline コメント", settings.comment_author)
         )
     posted = existing_finding_ids(_body(c) for c in ours)
-    plan = plan_inline(report, settings, commentable, posted)
+    sha = pr.head_sha or client.head_sha(pr)
+    try:
+        to_head = head_line_mapper(Path(report.target.root), sha)
+        plan = plan_inline(report, settings, commentable, posted, to_head=to_head)
+    except DiffError as exc:
+        # 行番号を確かめられないまま付けると、無関係な行に指摘が載る
+        result.warnings.append(
+            "PR の head と検査したコミットの行を対応づけられないため、"
+            f"inline コメントを省きます: {exc}"
+        )
+        return
+    result.inline_unmapped = plan.unmapped
+    if plan.unmapped:
+        result.warnings.append(
+            f"base 側の変更と重なる {plan.unmapped} 件は、"
+            "行を対応づけられないので inline を省きました"
+        )
     result.inline_already_posted = plan.already_posted
     result.inline_outside_diff = plan.outside_diff
     result.inline_over_limit = plan.over_limit
     if not plan.comments:
         return
-    sha = pr.head_sha or client.head_sha(pr)
     client.create_review(
         pr,
         sha,

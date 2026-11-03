@@ -21,7 +21,7 @@ def normalize_snippet(text: str) -> str:
 
 
 class Location(BaseModel):
-    """コード上の位置. path は必ずリポジトリルートからの相対パス (設計書 §6.1)."""
+    """コード上の位置. path は検査対象からの相対パス (設計書 §6.1)."""
 
     model_config = ConfigDict(frozen=True)
 
