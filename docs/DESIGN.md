@@ -1342,7 +1342,7 @@ class AggregationOutcome(BaseModel):
 | `confirmed` | 有効な Reviewer の大多数が「脆弱」かつ高信頼で一致 | 報告・CI 失敗対象 |
 | `likely` | 過半数が「脆弱」だが信頼度または一致度が中程度 | 報告・CI 失敗対象(既定) |
 | `review_required` | **判断が割れた**。または信頼度が閾値未満 | 報告する。CI は既定で落とさない |
-| `false_positive` | 大多数が「脆弱でない」と判断 | 既定では非表示(`--show-all` で表示) |
+| `false_positive` | 大多数が「脆弱でない」と判断 | `report.json` の `findings` には残る。ターミナルと Markdown では件数のみ |
 | `inconclusive` | 全 Reviewer が `unknown` / 文脈不足を訴えた | 報告。人間の確認を促す |
 | `error` | 有効な Verdict が 1 つも得られなかった | 報告。`--strict` で exit 3 |
 
@@ -1759,7 +1759,7 @@ LLM レビューは本質的に「自分のコードを外部サービスに送�
 2. コード部分を明確なデリミタで囲み、デリミタ文字列がコード内に出現したらエスケープする。
 3. LLM の出力は JSON Schema で拘束されるため、**出力の形は攻撃者に制御できない**。
    最悪でも「vulnerable: false」を誘導される程度で、任意の副作用は起きない(Reviewer に副作用がないため = P3)。
-4. `false_positive` 判定でも Candidate は必ずレポートに残る(`--show-all`)ため、完全な隠蔽はできない。
+4. `false_positive` 判定でも Candidate は必ず `report.json` に残る(ターミナルと Markdown では件数のみ)ため、完全な隠蔽はできない。
 5. 将来的な検討: 明らかな指示文パターンを検出したら、それ自体を `prompt_injection` カテゴリの
    Finding として報告する。
 
@@ -1964,7 +1964,7 @@ rate_limit:
 
 ### 22.3 無料枠向けプリセット
 
-`--slow` で `rpm: 5, concurrency: 1, max_candidates: 50` に落とす。
+`frugal` プリセット(`--preset frugal`)で候補数と文脈を絞り、レートは各 Reviewer の `rate_limit`(`rpm` / `rpd`)で宣言する。
 無料枠相当のレート(rpm 5 程度)で完走できることを、モックを用いた CI テストで検証する。
 
 ---
@@ -2587,7 +2587,7 @@ transport が 1 つしかない期間が長いと、その 1 つの都合がコ�
 | R3 | Context 不足による過大/過小評価 | `needs_more_context` を計測し、頻出するなら v2.1 の context expansion を前倒しする |
 | R4 | プロンプトインジェクション | §19.4 の多層防御。ただし**完全な防御はできない**と docs に明記する |
 | R5 | コードを外部 API に送ることへの組織的抵抗 | ローカル完結の構成(ローカルエンドポイント / ローカルコマンド)を `init` が検出できるようにする。`--dry-run` で送信内容を可視化 |
-| R6 | 無料枠のレート制限で大規模リポが完走できない | `max_candidates` と `--slow`、baseline による差分運用。「PR 差分レビューが主戦場」と位置づける |
+| R6 | 無料枠のレート制限で大規模リポが完走できない | `max_candidates`、`frugal` プリセットと `rate_limit`、baseline による差分運用。「PR 差分レビューが主戦場」と位置づける |
 | R7 | モデルの非決定性による結果の揺れ | temperature 0 + seed。それでも揺れることを docs に明記し、CI 用途では baseline での運用を推奨 |
 | R8 | PyPI 名 `security-checker` が空いていない可能性 | 公開前に確認。埋まっていれば配布名のみ変更し、CLI 名は維持 |
 | R9 | **同梱プリセットが対象コマンドのバージョン変更で壊れる** | プリセットはデータなので修正は YAML 1 行。`providers check` で実地検証でき、壊れても `command:` 直書きで回避できる。nightly でスモークテスト |
