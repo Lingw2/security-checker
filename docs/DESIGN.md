@@ -2254,6 +2254,8 @@ v3.0  Dynamic verification   隔離サンドボックス内での PoC 検証。�
 | `security_checker.aggregators` | `Aggregator` |
 | `security_checker.reporters` | `Reporter` |
 
+Scanner のプラグインは、入れただけでは動かない。`scanners.plugins` に書いたものだけを読み込んで実行する。
+
 ### 29.2 LLM を足す 3 つのルート
 
 **「新しい LLM を追加する」は、9 割のケースでコードを書かずに終わる。**

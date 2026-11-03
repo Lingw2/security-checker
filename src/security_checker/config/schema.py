@@ -37,6 +37,10 @@ class TargetConfig(StrictModel):
     exclude: list[str] = Field(default_factory=lambda: list(DEFAULT_EXCLUDES))
 
 
+#: `scanners.plugins` では使えない名前
+BUILTIN_SCANNER_NAMES = frozenset({"semgrep", "gitleaks", "osv", "trivy"})
+
+
 class ScannerConfig(StrictModel):
     enabled: bool = True
     timeout_s: int = Field(default=600, gt=0)
@@ -87,6 +91,20 @@ class ScannersConfig(StrictModel):
     osv: OsvConfig = OsvConfig()
     # 誤設定の検査はノイズが多く、既定にする根拠が弱い。opt-in
     trivy: TrivyConfig = TrivyConfig(enabled=False)
+    #: entry point で登録した自作スキャナ. ここに書いたものだけを動かす (§29.1)
+    plugins: dict[str, ScannerConfig] = Field(default_factory=dict)
+
+    @field_validator("plugins")
+    @classmethod
+    def _plugins_do_not_shadow_builtins(
+        cls, value: dict[str, ScannerConfig]
+    ) -> dict[str, ScannerConfig]:
+        shadowing = sorted(set(value) & BUILTIN_SCANNER_NAMES)
+        if shadowing:
+            raise ValueError(
+                f"scanners.plugins に内蔵スキャナの名前は使えません: {', '.join(shadowing)}"
+            )
+        return value
 
 
 class ContextConfig(StrictModel):
@@ -334,6 +352,7 @@ class Config(StrictModel):
             "gitleaks": self.scanners.gitleaks,
             "osv": self.scanners.osv,
             "trivy": self.scanners.trivy,
+            **self.scanners.plugins,
         }
 
     def masked_dump(self) -> dict[str, Any]:

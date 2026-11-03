@@ -84,8 +84,18 @@ v2 は `skipped` と `failed` を型で分け、どちらもレポートの冒�
 
 ## 自作のスキャナを足す
 
-`security_checker.scanners` の entry point に登録すると、内蔵と同じように使えます。
-適合性は公開の契約テストで確かめられます。
+`security_checker.scanners` の entry point に登録し、設定の `scanners.plugins` に書くと、
+内蔵と同じように実行されます。適合性は公開の契約テストで確かめられます。
+
+```yaml
+scanners:
+  plugins:
+    myscan: {enabled: true, timeout_s: 300, extra_args: []}
+```
+
+**入れただけでは動きません。** 依存に入ったパッケージが黙ってスキャナとして動かないようにするためです。
+登録されているのに設定に無いプラグインは警告を出し、設定にあるのに登録されていない名前は設定エラー (exit 2) にします。
+プラグインのファクトリは `ScannerConfig` を 1 つ受け取ります。
 
 ```python
 from security_checker.testing import ScannerContractTests
