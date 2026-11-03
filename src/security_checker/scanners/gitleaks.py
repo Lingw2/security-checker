@@ -24,6 +24,7 @@ from security_checker.scanners.base import (
     ScanContext,
     ScanResult,
     Target,
+    UnparseableOutputError,
     elapsed_ms,
     relative_path,
     run_command,
@@ -60,7 +61,10 @@ def parse_gitleaks(
     *,
     exclude: list[str] | None = None,
 ) -> tuple[list[Candidate], list[str]]:
-    """gitleaks の JSON を Candidate に正規化する (値はマスク済み)."""
+    """gitleaks の JSON を Candidate に正規化する (値はマスク済み).
+
+    出力全体を解釈できなければ `UnparseableOutputError` を投げる。
+    """
     warnings: list[str] = []
     candidates: list[Candidate] = []
     ids = IdFactory()
@@ -68,7 +72,7 @@ def parse_gitleaks(
     if payload is None:
         return [], []
     if not isinstance(payload, list):
-        return [], ["gitleaks: JSON のトップレベルが配列ではありません"]
+        raise UnparseableOutputError("JSON のトップレベルが配列ではありません")
 
     for index, item in enumerate(payload):
         if not isinstance(item, dict):
@@ -207,20 +211,28 @@ class GitleaksScanner(BaseScanner):
                     version=status.version,
                 )
 
-            payload: Any = []
-            if staging.exists() and staging.stat().st_size > 0:
-                try:
-                    payload = json.loads(staging.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError) as exc:
-                    return self.failed(
-                        f"gitleaks の出力を解釈できません: {exc}",
-                        exit_code=result.exit_code,
-                        stderr=result.stderr,
-                        duration_ms=duration,
-                        version=status.version,
-                    )
+            # gitleaks は検出 0 件でも `[]` を書く。無いのは検査結果を受け取れていないということ
+            # (extra_args で --report-path を上書きした場合など)
+            if not staging.exists() or staging.stat().st_size == 0:
+                return self.failed(
+                    "gitleaks がレポートを書きませんでした (シークレット検査の結果がありません)",
+                    exit_code=result.exit_code,
+                    stderr=result.stderr,
+                    duration_ms=duration,
+                    version=status.version,
+                )
+            try:
+                payload: Any = json.loads(staging.read_text(encoding="utf-8"))
+                candidates, warnings = parse_gitleaks(payload, target.root, exclude=ctx.exclude)
+            except (OSError, json.JSONDecodeError, UnparseableOutputError) as exc:
+                return self.failed(
+                    f"gitleaks の出力を解釈できません: {exc}",
+                    exit_code=result.exit_code,
+                    stderr=result.stderr,
+                    duration_ms=duration,
+                    version=status.version,
+                )
 
-        candidates, warnings = parse_gitleaks(payload, target.root, exclude=ctx.exclude)
         redacted_payload = [
             redact_raw_entry(entry, target.root) for entry in payload if isinstance(entry, dict)
         ]

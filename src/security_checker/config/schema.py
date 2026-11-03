@@ -154,6 +154,8 @@ class ReviewerConfig(StrictModel):
 
     name: str
     transport: Literal["http", "process"]
+    #: false なら読み込み時に外す. 手元で共有の Reviewer を止めるために使う
+    enabled: bool = True
     weight: float = Field(default=1.0, ge=0.0)
     #: 既定は transport で変わる (http 120 / process 300)。_default_timeout を参照
     timeout_s: int = Field(default=120, gt=0)

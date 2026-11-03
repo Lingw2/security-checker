@@ -103,6 +103,40 @@ def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]
     return merged
 
 
+def _merge_local_layer(merged: dict[str, Any], local: dict[str, Any]) -> dict[str, Any]:
+    """local 層の合成. reviewers だけは置き換えず、name をキーに足す.
+
+    手元用の Reviewer を足しても、チームの Reviewer は残る。同じ名前は項目ごとに上書きする。
+    """
+    combined = _deep_merge(merged, local)
+    shared, personal = merged.get("reviewers"), local.get("reviewers")
+    if not isinstance(shared, list) or not isinstance(personal, list):
+        return combined
+    reviewers = list(shared)
+    positions = {
+        entry["name"]: index
+        for index, entry in enumerate(reviewers)
+        if isinstance(entry, dict) and "name" in entry
+    }
+    for entry in personal:
+        index = positions.get(entry.get("name")) if isinstance(entry, dict) else None
+        if index is None:
+            reviewers.append(entry)
+        else:
+            reviewers[index] = _deep_merge(reviewers[index], entry)
+    combined["reviewers"] = reviewers
+    return combined
+
+
+def _drop_disabled_reviewers(merged: dict[str, Any]) -> dict[str, Any]:
+    """`enabled: false` の Reviewer を外す. 残りの検証は、外した後の構成に対して行う."""
+    reviewers = merged.get("reviewers")
+    if not isinstance(reviewers, list):
+        return merged
+    kept = [e for e in reviewers if not (isinstance(e, dict) and e.get("enabled") is False)]
+    return {**merged, "reviewers": kept}
+
+
 def _flatten(data: dict[str, Any], prefix: str = "") -> dict[str, Any]:
     flat: dict[str, Any] = {}
     for key, value in data.items():
@@ -217,12 +251,16 @@ def load_config(
     for name, data in layers:
         if not data:
             continue
-        merged = _deep_merge(merged, data)
+        merged = (
+            _merge_local_layer(merged, data)
+            if name.startswith("local:")
+            else _deep_merge(merged, data)
+        )
         for key in _flatten(data):
             origins[key] = name
 
     try:
-        config = Config.model_validate(merged)
+        config = Config.model_validate(_drop_disabled_reviewers(merged))
     except ValidationError as exc:
         raise ConfigError(_format_validation_error(exc)) from exc
 

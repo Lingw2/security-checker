@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from security_checker.models.enums import Category, Severity
+from security_checker.scanners.base import UnparseableOutputError
 from security_checker.scanners.gitleaks import parse_gitleaks, redact_raw_entry
 
 ROOT = Path("/repo")
@@ -75,6 +78,5 @@ def test_broken_entries_are_reported_not_swallowed(raw_fixture):
 def test_empty_and_missing_payloads():
     assert parse_gitleaks(None, ROOT) == ([], [])
     assert parse_gitleaks([], ROOT) == ([], [])
-    candidates, warnings = parse_gitleaks({"配列ではない": True}, ROOT)
-    assert candidates == []
-    assert warnings
+    with pytest.raises(UnparseableOutputError):
+        parse_gitleaks({"配列ではない": True}, ROOT)

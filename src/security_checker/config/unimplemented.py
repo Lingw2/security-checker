@@ -47,6 +47,8 @@ def unimplemented_warnings(config: Config, origins: Mapping[str, str] | None = N
             "効きません。票が過半数に満たない候補は常に review_required になります"
         )
 
+    warnings.extend(_output_flag_warnings(config))
+
     for reviewer in config.reviewers:
         warnings.extend(_transport_mismatch(reviewer))
 
@@ -62,6 +64,29 @@ def unimplemented_warnings(config: Config, origins: Mapping[str, str] | None = N
                     f"dialect: {reviewer.dialect or '(未指定)'} では無視されます"
                 )
 
+    return warnings
+
+
+#: extra_args に書くと、security-checker が読む出力の先や形式を変えてしまうフラグ
+_OUTPUT_FLAGS: dict[str, tuple[str, ...]] = {
+    "semgrep": ("--output", "-o", "--sarif", "--text", "--gitlab-sast", "--junit-xml", "--emacs"),
+    "gitleaks": ("--report-path", "-r", "--report-format", "-f"),
+    "osv": ("--format", "-f", "--output"),
+    "trivy": ("--format", "-f", "--output", "-o"),
+}
+
+
+def _output_flag_warnings(config: Config) -> list[str]:
+    """出力を奪うフラグは、スキャナを失敗させる. 実行前に理由を伝える (§7.2)."""
+    warnings: list[str] = []
+    for name, settings in config.scanner_settings().items():
+        for argument in settings.extra_args:
+            flag = argument.split("=", 1)[0]
+            if flag in _OUTPUT_FLAGS.get(name, ()):
+                warnings.append(
+                    f"scanners.{name}.extra_args の {flag} は使えません。"
+                    "出力の先や形式を変えると結果を読めず、スキャナは failed になります"
+                )
     return warnings
 
 

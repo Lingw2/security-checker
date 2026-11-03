@@ -1196,7 +1196,7 @@ scanners:
   semgrep:
     enabled: true
     config: p/default           # semgrep のルールセット
-    timeout_s: 600
+    timeout_s: 600              # スキャナのプロセス全体の上限
     extra_args: []
   gitleaks:  { enabled: true }
   osv:       { enabled: true }

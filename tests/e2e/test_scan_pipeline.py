@@ -6,11 +6,14 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
+from security_checker.cli import app
 from security_checker.config.schema import Config
 from security_checker.errors import ExitCode
 from security_checker.models.enums import Category, ScanStatus, Severity
@@ -121,3 +124,52 @@ async def test_broken_scanner_config_is_failed(workspace, tmp_path):
     assert outcome.report.score.partial is True
     payload = json.loads(write_json(outcome.report, outcome.output_dir).read_text(encoding="utf-8"))
     assert payload["scanners"][0]["status"] == "failed"
+
+
+# --- 出力の形が想定と違う run を成功にしない (#175) ----------------------------------
+
+
+def _fake_tool(directory: Path, name: str, body: str) -> None:
+    path = directory / name
+    path.write_text(
+        f'#!/bin/sh\n[ "$1" = "--version" ] && {{ echo 1.0.0; exit 0; }}\n{body}\n',
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="シェルスクリプトの偽バイナリを使う")
+@pytest.mark.parametrize(
+    ("semgrep_body", "gitleaks_body", "failed"),
+    [
+        ("""echo '{"version":"1.99.0","runs":[]}'""", "exit 0", {"semgrep", "gitleaks"}),
+        ("""echo '{"results":"x"}'""", "exit 0", {"semgrep", "gitleaks"}),
+    ],
+)
+def test_unexpected_output_fails_and_exits_3(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    semgrep_body: str,
+    gitleaks_body: str,
+    failed: set[str],
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _fake_tool(bin_dir, "semgrep", semgrep_body)
+    _fake_tool(bin_dir, "gitleaks", gitleaks_body)
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "a.py").write_text("print(1)\n", encoding="utf-8")
+    config = tmp_path / "sc.yml"
+    config.write_text("version: 1\nscanners:\n  osv: {enabled: false}\n", encoding="utf-8")
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    out = tmp_path / "out"
+    result = CliRunner().invoke(
+        app, ["scan", str(target), "-c", str(config), "-o", str(out), "-f", "json", "--strict"]
+    )
+    assert result.exit_code == ExitCode.EXECUTION_ERROR
+    report = json.loads((out / "report.json").read_text(encoding="utf-8"))
+    statuses = {run["scanner"]: run["status"] for run in report["scanners"]}
+    assert {name for name, status in statuses.items() if status == "failed"} == failed
+    assert report["score"]["partial"] is True

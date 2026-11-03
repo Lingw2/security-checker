@@ -6,6 +6,8 @@ v1 の最大の欠陥は「ツールが失敗しても成功に見える」こ�
 
 from __future__ import annotations
 
+import pytest
+
 from security_checker.config.loader import load_config
 from security_checker.config.schema import Config
 from security_checker.config.unimplemented import unimplemented_warnings
@@ -162,3 +164,22 @@ def test_min_ratio_below_a_majority_is_reported():
     config = Config.model_validate({"aggregation": {"consensus": {"min_ratio": 0.3}}})
     assert any("min_ratio" in warning for warning in unimplemented_warnings(config))
     assert not any("min_ratio" in warning for warning in unimplemented_warnings(Config()))
+
+
+@pytest.mark.parametrize(
+    ("scanner", "argument"),
+    [
+        ("semgrep", "--sarif"),
+        ("semgrep", "--output=x"),
+        ("gitleaks", "--report-path"),
+        ("trivy", "--format"),
+    ],
+)
+def test_extra_args_that_take_over_the_output_are_reported(scanner, argument):
+    config = Config.model_validate({"scanners": {scanner: {"extra_args": [argument]}}})
+    assert any("extra_args" in warning for warning in unimplemented_warnings(config))
+
+
+def test_other_extra_args_are_not_reported():
+    config = Config.model_validate({"scanners": {"semgrep": {"extra_args": ["--timeout", "30"]}}})
+    assert not any("extra_args" in warning for warning in unimplemented_warnings(config))

@@ -45,6 +45,13 @@ class ScanContext:
     untrusted: UntrustedOverrides | None = None
 
 
+class UnparseableOutputError(Exception):
+    """出力全体の形が想定と違う. 1 エントリの破損 (parse_warnings) とは分ける.
+
+    これを 0 件の成功として扱うと、何も検査していないのにスコアが満点に見える (§7.2)。
+    """
+
+
 class ToolStatus(BaseModel):
     """外部コマンドの導入状況."""
 

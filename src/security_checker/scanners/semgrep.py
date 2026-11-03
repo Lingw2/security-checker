@@ -18,6 +18,7 @@ from security_checker.scanners.base import (
     ScanContext,
     ScanResult,
     Target,
+    UnparseableOutputError,
     as_dict,
     elapsed_ms,
     relative_path,
@@ -61,19 +62,20 @@ def parse_semgrep(
     """semgrep の JSON を Candidate に正規化する.
 
     壊れたエントリは parse_warnings に落として続行する (設計書 §7.2-5)。
+    出力全体を解釈できなければ `UnparseableOutputError` を投げる。
     """
     warnings: list[str] = []
     candidates: list[Candidate] = []
     ids = IdFactory()
 
     if not isinstance(payload, dict):
-        return [], ["semgrep: JSON のトップレベルがオブジェクトではありません"]
+        raise UnparseableOutputError("JSON のトップレベルがオブジェクトではありません")
 
     results = payload.get("results")
     if results is None:
-        return [], ["semgrep: results フィールドがありません"]
+        raise UnparseableOutputError("results フィールドがありません")
     if not isinstance(results, list):
-        return [], ["semgrep: results が配列ではありません"]
+        raise UnparseableOutputError("results が配列ではありません")
 
     for index, item in enumerate(results):
         if not isinstance(item, dict):
@@ -188,8 +190,6 @@ class SemgrepScanner(BaseScanner):
             "--json",
             "--quiet",
             "--metrics=off",
-            "--timeout",
-            str(self.settings.timeout_s),
         ]
         for pattern in ctx.exclude:
             argv += ["--exclude", pattern]
@@ -235,7 +235,17 @@ class SemgrepScanner(BaseScanner):
                 raw_path=raw_path,
             )
 
-        candidates, warnings = parse_semgrep(payload, target.root, exclude=ctx.exclude)
+        try:
+            candidates, warnings = parse_semgrep(payload, target.root, exclude=ctx.exclude)
+        except UnparseableOutputError as exc:
+            return self.failed(
+                f"semgrep の出力を解釈できません: {exc}",
+                exit_code=result.exit_code,
+                stderr=result.stderr,
+                duration_ms=duration,
+                version=status.version,
+                raw_path=raw_path,
+            )
         return self.ok(
             candidates,
             duration_ms=duration,

@@ -136,7 +136,7 @@ output:
 
 手元でだけ使う Reviewer は `security-checker.local.yml`(git 管理外・`.gitignore` 済み)に
 書きます。共有設定の後に重なるので、`security-checker.yml` を汚さずに個人の Reviewer を
-足せます。`security-checker init --local` で生成でき、`config show --explain` に
+足せます (`reviewers` は名前で合成します)。`security-checker init --local` で生成でき、`config show --explain` に
 どの層で決まったかが出ます。
 
 終了コードは目的別に分かれています(設計書 §17.1)。
