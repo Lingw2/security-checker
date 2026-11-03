@@ -77,7 +77,7 @@ v2 は `skipped` と `failed` を型で分け、どちらもレポートの冒�
 
 ### trivy
 
-- `scanners: [config]` で誤設定、`[vuln]` で依存の脆弱性を見ます (osv と重なるので、どちらかで足ります)。
+- `scanners: [config]` で誤設定、`[vuln]` で依存の脆弱性を見ます (osv と重なるので、どちらかで足ります。両方を有効にした場合、同じ manifest の同じ版で CVE か別名が重なる候補は 1 件にまとめ、もう一方のスキャナ名を `also_reported_by` に残します)。
 - **`secret` は受け付けません。** trivy のシークレット検出は検出値を出力に含めるため、生出力に値が残ります。
   シークレットはマスク処理のある gitleaks で見てください。
 - オフライン環境では `extra_args: ["--offline-scan", "--skip-check-update"]` などを渡します。

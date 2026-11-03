@@ -19,7 +19,7 @@ from security_checker.language import DEFAULT_LANGUAGE, output_language_instruct
 from security_checker.models.task import ReviewTask
 
 PROMPT_DIR = Path(__file__).parent
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v2"
 
 
 @lru_cache(maxsize=1)
@@ -33,7 +33,7 @@ def _environment() -> Environment:
 
 
 def render_system(language: str = DEFAULT_LANGUAGE) -> str:
-    """system プロンプト. 英語のときは v1 テンプレートと完全に一致する.
+    """system プロンプト. 英語のときはテンプレートと完全に一致する.
 
     言語指示はテンプレートに埋め込まず末尾に足す。英語では 1 文字も変わらないため、
     プロンプト版を分けずに済む (§11 のテンプレート版管理の意図を保つ)。
@@ -50,7 +50,9 @@ def render_user(task: ReviewTask, schema: dict[str, object]) -> str:
         .get_template(f"user.{PROMPT_VERSION}.jinja")
         .render(
             candidate=task.candidate,
+            finding=_finding_fields(task),
             primary=primary,
+            primary_path=_one_line(primary.path) if primary is not None else "",
             primary_text=_sanitize(primary.numbered()) if primary is not None else "",
             callers=[
                 {
@@ -68,9 +70,35 @@ def render_user(task: ReviewTask, schema: dict[str, object]) -> str:
     )
 
 
+def _finding_fields(task: ReviewTask) -> dict[str, str]:
+    """スキャナの出力に由来する欄. 検査対象のコードを含みうるので信頼しない (§19.4).
+
+    semgrep は message や fix のメタ変数を一致したコードに置き換えて返す。
+    改行を残すと、見出しに見える行を作れてしまう。
+    """
+    candidate = task.candidate
+    package = candidate.package
+    return {
+        "rule_id": _one_line(candidate.rule_id),
+        "message": _one_line(candidate.message),
+        "cwe": _one_line(", ".join(candidate.cwe)),
+        "cve": _one_line(", ".join(candidate.cve)),
+        "package": _one_line(f"{package.ecosystem}:{package.name}@{package.version or 'unknown'}")
+        if package is not None
+        else "",
+        "fix_available": _one_line(candidate.fix_available or ""),
+    }
+
+
+def _one_line(text: str) -> str:
+    return " ".join(_sanitize(text).split())
+
+
 _DELIMITERS = (
     "<<<UNTRUSTED_CODE>>>",
     "<<<END_UNTRUSTED_CODE>>>",
+    "<<<UNTRUSTED_FINDING>>>",
+    "<<<END_UNTRUSTED_FINDING>>>",
     "<<<UNTRUSTED_OPINIONS>>>",
     "<<<END_UNTRUSTED_OPINIONS>>>",
 )

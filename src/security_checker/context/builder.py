@@ -88,6 +88,16 @@ class ContextBuilder:
                     "判断に足りなければ needs_more_context に記載してください。"
                 )
 
+        # スキャナの message や fix にも検査対象の文字列が入る。ReviewTask に入る文字列は
+        # すべてここでマスクする (§19.2 の必須通過点)。レポート用の Candidate は変えない
+        candidate = candidate.model_copy(
+            update={
+                "message": mask_sensitive_values(candidate.message),
+                "fix_available": mask_sensitive_values(candidate.fix_available)
+                if candidate.fix_available
+                else None,
+            }
+        )
         context = CodeContext(primary=primary, truncated=truncated)
         estimated = PROMPT_OVERHEAD_TOKENS + (
             estimate_tokens(primary.text) if primary is not None else 0

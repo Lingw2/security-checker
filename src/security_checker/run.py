@@ -27,7 +27,7 @@ from security_checker.github.pr import DiffScope, repo_prefix
 from security_checker.ids import new_run_id
 from security_checker.language import resolve_language
 from security_checker.models.candidate import Candidate
-from security_checker.models.enums import ScanStatus, Severity
+from security_checker.models.enums import Category, ScanStatus, Severity
 from security_checker.models.finding import Finding
 from security_checker.models.report import (
     Coverage,
@@ -120,7 +120,11 @@ def _sort_key(candidate: Candidate) -> tuple[int, str, str, int]:
 
 
 def dedupe_and_sort(results: list[ScanResult]) -> list[Candidate]:
-    """スキャナ横断で重複 ID を落とし、重大度順に並べる."""
+    """スキャナ横断で同じ指摘を 1 件にまとめ、重大度順に並べる.
+
+    候補 ID はスキャナ名を含むので、ID では重複を見つけられない。文字どおり同じ ID のほかに、
+    依存の脆弱性だけは内容で突き合わせる (osv と trivy の vuln は同じものを報告する)。
+    """
     seen: set[str] = set()
     merged: list[Candidate] = []
     for result in results:
@@ -129,7 +133,56 @@ def dedupe_and_sort(results: list[ScanResult]) -> list[Candidate]:
                 continue
             seen.add(candidate.id)
             merged.append(candidate)
-    return sorted(merged, key=_sort_key)
+    return sorted(_merge_dependency_duplicates(merged), key=_sort_key)
+
+
+def _advisory_ids(candidate: Candidate) -> set[str]:
+    return {candidate.rule_id.upper(), *(cve.upper() for cve in candidate.cve)}
+
+
+def _merge_dependency_duplicates(candidates: list[Candidate]) -> list[Candidate]:
+    """同じ manifest の同じ版で、CVE か別名が重なる依存の候補を 1 件にまとめる.
+
+    ecosystem は比べない。スキャナごとに表記が違う (PyPI と pip など) うえ、manifest で決まる。
+    先に報告したスキャナの候補を残し、ID を保つ。重大度は厳しいほうを採る。
+    """
+    kept: list[Candidate] = []
+    groups: dict[tuple[str, str | None, str | None], list[int]] = {}
+    for candidate in candidates:
+        package = candidate.package
+        if candidate.category is not Category.DEPENDENCY or package is None:
+            kept.append(candidate)
+            continue
+        key = (package.name.lower(), package.version, package.manifest)
+        duplicate = next(
+            (
+                index
+                for index in groups.get(key, [])
+                if kept[index].scanner != candidate.scanner
+                and _advisory_ids(kept[index]) & _advisory_ids(candidate)
+            ),
+            None,
+        )
+        if duplicate is None:
+            groups.setdefault(key, []).append(len(kept))
+            kept.append(candidate)
+        else:
+            kept[duplicate] = _merge_candidates(kept[duplicate], candidate)
+    return kept
+
+
+def _merge_candidates(first: Candidate, other: Candidate) -> Candidate:
+    severities = [c.severity_reported for c in (first, other) if c.severity_reported is not None]
+    return first.model_copy(
+        update={
+            "severity_reported": max(severities, default=None),
+            "cve": list(dict.fromkeys([*first.cve, *other.cve])),
+            "cwe": list(dict.fromkeys([*first.cwe, *other.cwe])),
+            "references": list(dict.fromkeys([*first.references, *other.references])),
+            "fix_available": first.fix_available or other.fix_available,
+            "also_reported_by": [*first.also_reported_by, other.scanner],
+        }
+    )
 
 
 def _suppress(
