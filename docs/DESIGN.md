@@ -2062,16 +2062,21 @@ LLM を含むシステムのテストで最大の失敗は「実 API を叩く�
 from security_checker.testing import ProviderContractTests
 
 class TestMyProvider(ProviderContractTests):
-    provider_factory = lambda: MyProvider(base_url="http://mock", model="m")
+    def make_provider(self):
+        return MyProvider(base_url="http://mock", model="m")
+
+    # 任意。偽のエンドポイントを注入できる Provider は、3・4・6 番まで検証できる
+    def make_http_provider(self, handler):
+        return MyProvider(..., client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
 ```
 
-契約テストが検証する項目:
+契約テストが検証する項目(3・4・6 番は `make_http_provider` を実装した場合。実装しなければ skip):
 
 1. `capabilities` が有効な値を返す
 2. 正常応答で `CompletionResponse` を返し、`usage` が埋まる
 3. 401 → `ProviderAuthError`、429 → `ProviderRateLimitError`(+ `retry_after`)、500 → `ProviderServerError`、
    タイムアウト → `ProviderTimeoutError` に正しく正規化される
-4. `json_schema` 指定時に `parsed` が返る(または適切に降格する)
+4. `json_schema` が 400 で拒否されたら 1 段降格して `degraded_to` が入り、それ以外の 4xx では降格しない
 5. `aclose()` で接続が解放される
 6. リトライを Provider 内部で実装していない(スケジューラの責務を侵さない)
 

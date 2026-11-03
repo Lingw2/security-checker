@@ -5,6 +5,9 @@
     class TestMyProvider(ProviderContractTests):
         def make_provider(self):
             return MyProvider(...)
+
+HTTP で話す Provider は `make_http_provider` も実装すると、例外の正規化・降格・
+内部リトライなしまで検証できる。実装しなければ、その項目は skip になる。
 """
 
 from __future__ import annotations
@@ -13,9 +16,11 @@ import asyncio
 import os
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 
 from security_checker.providers.base import (
@@ -25,7 +30,13 @@ from security_checker.providers.base import (
     LLMProvider,
     StructuredMode,
 )
-from security_checker.providers.errors import ProviderTimeoutError
+from security_checker.providers.errors import (
+    ProviderAuthError,
+    ProviderBadRequestError,
+    ProviderRateLimitError,
+    ProviderServerError,
+    ProviderTimeoutError,
+)
 from security_checker.providers.process.runner import ProcessProvider
 
 
@@ -34,6 +45,29 @@ class ProviderContractTests:
 
     def make_provider(self) -> LLMProvider:  # pragma: no cover - サブクラスが実装する
         raise NotImplementedError
+
+    def make_http_provider(
+        self, handler: Callable[[httpx.Request], httpx.Response]
+    ) -> LLMProvider | None:
+        """`handler` を偽のエンドポイントとして使う Provider を返す (任意).
+
+        `httpx.MockTransport(handler)` を内部のクライアントに渡す。
+        注入できない Provider は None のままでよい。§25.2 の 3・4・6 番が skip になる。
+        """
+        del handler
+        return None
+
+    def ok_response(self) -> httpx.Response:
+        """スキーマを満たす正常応答. 方言ごとに形が違うので、必要なら上書きする."""
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": "{}"}}], "usage": {"prompt_tokens": 1}}
+        )
+
+    def _http_provider(self, handler: Callable[[httpx.Request], httpx.Response]) -> LLMProvider:
+        provider = self.make_http_provider(handler)
+        if provider is None:
+            pytest.skip("make_http_provider が実装されていない (§25.2 の 3・4・6 番)")
+        return provider
 
     def make_request(self, **overrides: Any) -> CompletionRequest:
         payload: dict[str, Any] = {
@@ -65,13 +99,97 @@ class ProviderContractTests:
         response = await provider.complete(self.make_request())
         assert isinstance(response, CompletionResponse)
         assert isinstance(response.text, str)
-        assert response.usage.input_tokens >= 0
+        assert response.usage.total_tokens > 0, "usage が埋まっていない"
         await provider.aclose()
 
     @pytest.mark.asyncio
     async def test_aclose_is_idempotent(self) -> None:
         provider = self.make_provider()
         await provider.aclose()
+        await provider.aclose()
+
+    # --- HTTP の失敗の正規化 (§25.2 の 3 番) ------------------------------------
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("status", "error"),
+        [
+            (401, ProviderAuthError),
+            (403, ProviderAuthError),
+            (429, ProviderRateLimitError),
+            (500, ProviderServerError),
+            (503, ProviderServerError),
+        ],
+    )
+    async def test_http_errors_are_normalized(self, status: int, error: type[Exception]) -> None:
+        provider = self._http_provider(lambda _: httpx.Response(status, text="error"))
+        with pytest.raises(error):
+            await provider.complete(self.make_request())
+        await provider.aclose()
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_carries_retry_after(self) -> None:
+        provider = self._http_provider(
+            lambda _: httpx.Response(429, text="slow", headers={"Retry-After": "12"})
+        )
+        with pytest.raises(ProviderRateLimitError) as excinfo:
+            await provider.complete(self.make_request())
+        assert excinfo.value.retry_after == 12.0
+        await provider.aclose()
+
+    @pytest.mark.asyncio
+    async def test_a_timeout_is_normalized(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ReadTimeout("timeout", request=request)
+
+        provider = self._http_provider(handler)
+        with pytest.raises(ProviderTimeoutError):
+            await provider.complete(self.make_request())
+        await provider.aclose()
+
+    # --- 構造化出力の降格 (§25.2 の 4 番) --------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_a_rejected_schema_is_degraded(self) -> None:
+        """400 なら 1 段降格して送り直し、結果に degraded_to が入る."""
+        responses = [httpx.Response(400, text="unsupported schema"), self.ok_response()]
+        provider = self._http_provider(lambda _: responses.pop(0))
+        if provider.capabilities.structured_output is StructuredMode.PROMPT_ONLY:
+            pytest.skip("これ以上降格できない")
+        response = await provider.complete(self.make_request())
+        assert response.degraded_to is not None
+        await provider.aclose()
+
+    @pytest.mark.asyncio
+    async def test_other_client_errors_are_not_degraded(self) -> None:
+        calls: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            return httpx.Response(404, text="no such model")
+
+        provider = self._http_provider(handler)
+        with pytest.raises(ProviderBadRequestError):
+            await provider.complete(self.make_request())
+        assert len(calls) == 1
+        await provider.aclose()
+
+    # --- 内部でリトライしない (§25.2 の 6 番) -----------------------------------
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", [429, 500])
+    async def test_no_retry_inside_the_provider(self, status: int) -> None:
+        """リトライは scheduler の責務. 内部で繰り返すとバックオフと予算が効かなくなる."""
+        calls: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            return httpx.Response(status, text="error")
+
+        provider = self._http_provider(handler)
+        with pytest.raises((ProviderRateLimitError, ProviderServerError)):
+            await provider.complete(self.make_request())
+        assert len(calls) == 1
         await provider.aclose()
 
 

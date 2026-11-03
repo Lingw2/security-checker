@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import httpx
 import respx
 
@@ -33,6 +35,18 @@ class TestOpenAIChatProviderContract(ProviderContractTests):
             model="m",
             capabilities=Capabilities(structured_output=StructuredMode.JSON_SCHEMA),
             client=httpx.AsyncClient(),
+        )
+
+    def make_http_provider(
+        self, handler: Callable[[httpx.Request], httpx.Response]
+    ) -> LLMProvider | None:
+        return HttpProvider(
+            name="contract",
+            dialect=OpenAIChatDialect(),
+            base_url=BASE_URL,
+            model="m",
+            capabilities=Capabilities(structured_output=StructuredMode.JSON_SCHEMA),
+            client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
         )
 
     def teardown_method(self) -> None:

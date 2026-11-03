@@ -217,7 +217,9 @@ my_provider = "my_plugin.provider:MyProvider"
 ```
 
 `security_checker.testing.ProviderContractTests` を継承すれば、自作 Provider が契約を
-満たしているか検証できます（例外の正規化、`usage` の充足、リトライを内部で持たないこと等）。
+満たしているか検証できます。`capabilities` の妥当性、`usage` の充足、`aclose()` を常に検証します。
+`make_http_provider(handler)` を実装して偽のエンドポイントを注入できるようにすると、例外の正規化、
+構造化出力の降格、リトライを内部で持たないことも検証します（実装しなければ skip になります）。
 
 ---
 
