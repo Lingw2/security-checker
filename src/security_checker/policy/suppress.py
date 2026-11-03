@@ -17,13 +17,13 @@ from security_checker.config.schema import Config
 from security_checker.models.candidate import Candidate
 from security_checker.models.finding import SuppressionReason
 from security_checker.models.report import SuppressedCandidate
-from security_checker.policy.baseline import load_baseline
+from security_checker.policy.baseline import Baseline, load_baseline
 from security_checker.policy.ignore import AnnotationReader, IgnoreFile, load_ignore_file
 
 
 @dataclass
 class SuppressionRules:
-    baseline: frozenset[str] = frozenset()
+    baseline: Baseline = field(default_factory=Baseline)
     ignore: IgnoreFile | None = None
     annotations: AnnotationReader | None = None
     warnings: list[str] = field(default_factory=list)
@@ -46,7 +46,8 @@ def load_rules(
         rules.baseline = load_baseline(path if path.is_absolute() else base_dir / path)
 
     ignore_dir = base_dir if untrusted_target else root
-    rules.ignore, rules.warnings = load_ignore_file(ignore_dir)
+    rules.ignore, ignore_warnings = load_ignore_file(ignore_dir)
+    rules.warnings = [*rules.baseline.warnings, *ignore_warnings]
     if untrusted_target:
         rules.warnings.append(
             "検査対象を信用しない設定のため、コード内の ignore 注釈と検査対象の "
@@ -88,10 +89,16 @@ def apply_suppressions(
                 )
             )
             continue
-        if candidate.id in rules.baseline:
+        if rules.baseline.covers(candidate):
             suppressed.append(
                 SuppressedCandidate(candidate=candidate, reason=SuppressionReason.BASELINE)
             )
             continue
+        if candidate.id in rules.baseline.ids:
+            # 値を書かずに伝える。同じ場所で鍵を差し替えたときの新しい秘密を見逃さない
+            warnings.append(
+                f"{candidate.where}: baseline に記録した秘密と値が違うため、"
+                "新しい候補として扱います"
+            )
         kept.append(candidate)
     return kept, suppressed, warnings

@@ -146,6 +146,9 @@ security-checker baseline update     # .security-checker-baseline.json を書き
 ```
 
 キーは候補の安定 ID (行番号を含まない) なので、無関係な編集では壊れません。
+秘密の候補は値のソルト付き要約も照合するので、同じ場所で値を差し替えると新しい候補になります。
+古い形式の baseline は ID だけで照合し、更新を促す警告を出します
+(判断の理由は [ADR 0008](adr/0008-baseline-secret-hash.md))。
 スキャナが失敗した run では更新を拒否します (復旧後に既存の検出が「新規」として噴き出すため)。
 
 **`.security-checker-ignore`** — パスとルールで外す。

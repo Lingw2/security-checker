@@ -1497,7 +1497,8 @@ exit code は **Actions の status check**に、Finding の重大度は **Code S
 
 - `baseline`: 既存 Finding の `candidate.id` を記録した JSON。一致するものは `suppressed` として
   レポートに残しつつ CI を落とさない。`security-checker baseline update` で生成。
-  既存リポジトリへの段階的導入を可能にする。
+  既存リポジトリへの段階的導入を可能にする。秘密の候補は、値のソルト付き要約も記録して照合する
+  (同じ場所で値を差し替えた秘密を抑制しない。ADR 0008)。
 - `.security-checker-ignore`: gitignore 記法のパス除外 + `rule_id` 単位の除外。
 - コード内注釈: `# security-checker: ignore[rule_id] reason=...`。
   **理由の記述を必須**とし、理由なしの抑制は警告を出す。

@@ -14,17 +14,18 @@ from typer.testing import CliRunner
 from security_checker.cli import app
 from security_checker.config.schema import Config
 from security_checker.errors import ConfigError, ExitCode
-from security_checker.models.candidate import Location, PackageRef
+from security_checker.models.candidate import Candidate, Location, PackageRef
 from security_checker.models.enums import ScanStatus, Severity
 from security_checker.models.finding import SuppressionReason
-from security_checker.policy.baseline import load_baseline, write_baseline
+from security_checker.policy.baseline import Baseline, load_baseline, write_baseline
 from security_checker.policy.ignore import (
     AnnotationReader,
     parse_annotation,
     parse_ignore_file,
 )
-from security_checker.policy.suppress import apply_suppressions, load_rules
+from security_checker.policy.suppress import SuppressionRules, apply_suppressions, load_rules
 from security_checker.run import run_scan
+from security_checker.scanners.gitleaks import parse_gitleaks
 from security_checker.testing.fakes import FakeScanner
 from tests.factories import make_candidate
 
@@ -34,7 +35,7 @@ from tests.factories import make_candidate
 def test_baseline_round_trip(tmp_path):
     candidates = [make_candidate("b", path="b.py"), make_candidate("a", path="a.py")]
     path = write_baseline(tmp_path / "base.json", candidates, tool_version="2.0.0")
-    assert load_baseline(path) == {"a", "b"}
+    assert load_baseline(path).ids == {"a", "b"}
     entries = json.loads(path.read_text(encoding="utf-8"))["entries"]
     # 人間がレビューできるよう、場所順に並び、ルールと場所も書かれる
     assert [e["where"] for e in entries] == ["a.py:42", "b.py:42"]
@@ -46,7 +47,7 @@ def test_baseline_round_trip(tmp_path):
     [
         "not json",
         "[]",
-        '{"version": 2, "entries": []}',
+        '{"version": 99, "entries": []}',
         '{"version": 1}',
         '{"version": 1, "entries": [{}]}',
     ],
@@ -188,7 +189,7 @@ def test_baseline_path_is_relative_to_the_config_file(tmp_path):
     )
     config = Config.model_validate({"policy": {"baseline": "base.json"}})
     rules = load_rules(config, tmp_path / "target", config_dir=config_dir)
-    assert rules.baseline == {"x"}
+    assert rules.baseline.ids == {"x"}
 
 
 def test_untrusted_target_does_not_read_annotations_or_its_ignore_file(tmp_path):
@@ -253,7 +254,7 @@ def test_cli_baseline_update_writes_the_default_file(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["baseline", "update", str(tmp_path)])
     assert result.exit_code == ExitCode.OK, result.output
-    assert load_baseline(tmp_path / ".security-checker-baseline.json") == frozenset()
+    assert load_baseline(tmp_path / ".security-checker-baseline.json").ids == frozenset()
     assert "policy:" in result.stdout
 
 
@@ -274,6 +275,87 @@ def test_cli_scan_with_a_missing_baseline_is_a_config_error(tmp_path, monkeypatc
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["scan", str(tmp_path)])
     assert result.exit_code == ExitCode.CONFIG_ERROR
+
+
+# --- 同じ場所で差し替えた秘密を抑制しない (#158) -----------------------------------
+
+
+def _secret_candidate(secret: str) -> Candidate:
+    payload = [
+        {
+            "RuleID": "generic-api-key",
+            "File": "config.py",
+            "StartLine": 3,
+            "EndLine": 3,
+            "Secret": secret,
+            "Match": f'API_KEY = "{secret}"',
+            "Description": "d",
+        }
+    ]
+    return parse_gitleaks(payload, Path("/repo"))[0][0]
+
+
+OLD_VALUE = "TESTONLYoldDummyValue1111"  # gitleaks:allow
+NEW_VALUE = "TESTONLYnewDummyValue2222xyz"  # gitleaks:allow
+
+
+def test_a_rotated_secret_is_not_covered_by_the_baseline(tmp_path):
+    old, new = _secret_candidate(OLD_VALUE), _secret_candidate(NEW_VALUE)
+    assert old.id == new.id  # ID は行の形だけで決まる。値の照合は baseline の役目
+    path = write_baseline(tmp_path / "base.json", [old], tool_version="2.0.0")
+    rules = SuppressionRules(baseline=load_baseline(path))
+
+    kept, suppressed, warnings = apply_suppressions([old], rules)
+    assert (kept, len(suppressed), warnings) == ([], 1, [])
+
+    kept, suppressed, warnings = apply_suppressions([new], rules)
+    assert [candidate.id for candidate in kept] == [new.id]
+    assert suppressed == []
+    assert "値が違う" in warnings[0]
+    assert NEW_VALUE not in warnings[0]
+
+
+def test_baseline_file_does_not_contain_the_secret_or_its_plain_hash(tmp_path):
+    old = _secret_candidate(OLD_VALUE)
+    text = write_baseline(tmp_path / "b.json", [old], tool_version="2.0.0").read_text("utf-8")
+    assert OLD_VALUE not in text
+    assert old.secret_digest is not None
+    assert old.secret_digest not in text
+    assert "secret_hash" in text
+
+
+def test_the_salt_is_kept_when_the_baseline_is_updated(tmp_path):
+    path = tmp_path / "b.json"
+    old = _secret_candidate(OLD_VALUE)
+    write_baseline(path, [old], tool_version="2.0.0")
+    first = load_baseline(path)
+    write_baseline(path, [old], tool_version="2.0.1")
+    assert load_baseline(path) == first
+    other = load_baseline(write_baseline(tmp_path / "other.json", [old], tool_version="2.0.0"))
+    assert other.secret_hashes != first.secret_hashes  # 別のファイルとは突き合わせられない
+
+
+def test_a_legacy_baseline_still_suppresses_by_id_and_warns(tmp_path):
+    old, new = _secret_candidate(OLD_VALUE), _secret_candidate(NEW_VALUE)
+    path = tmp_path / "v1.json"
+    path.write_text(json.dumps({"version": 1, "entries": [{"id": old.id}]}), encoding="utf-8")
+    baseline = load_baseline(path)
+    assert baseline.covers(new)
+    assert "baseline update" in baseline.warnings[0]
+
+
+def test_the_secret_digest_never_reaches_a_report():
+    candidate = _secret_candidate(OLD_VALUE)
+    assert candidate.secret_digest is not None
+    assert "secret_digest" not in candidate.model_dump()
+    assert candidate.secret_digest not in candidate.model_dump_json()
+    assert candidate.secret_digest not in repr(candidate)
+
+
+def test_baseline_without_a_recorded_hash_matches_by_id():
+    baseline = Baseline(ids=frozenset({"c1"}))
+    assert baseline.covers(make_candidate("c1"))
+    assert not baseline.covers(make_candidate("c2"))
 
 
 # --- 行末の注釈は次の行に効かない (#157) ----------------------------------------

@@ -12,6 +12,7 @@
 | [0005](0005-composite-action-until-ghcr.md) | GHCR 公開までは composite action で配る | 採用 (2026-10-04) |
 | [0006](0006-outside-diff-candidates-in-sarif.md) | diff の範囲外の候補も SARIF に note で残す | 採用 (2026-10-04) |
 | [0007](0007-no-required-approvals-while-single-maintainer.md) | メンテナが 1 人の間は、マージに承認を必須にしない | 採用 (2026-10-19) |
+| [0008](0008-baseline-secret-hash.md) | baseline の秘密は、候補 ID ではなく baseline のソルト付き要約で照合する | 採用 (2026-11-04) |
 | [0009](0009-gate-on-sarif-level-only.md) | Code Scanning のゲートは SARIF の level だけで掛け、security-severity を付けない | 採用 (2026-11-04) |
 
 新しい ADR は連番で足し、既存のものは書き換えずに「置き換えた」ことを新しい ADR に書きます。
