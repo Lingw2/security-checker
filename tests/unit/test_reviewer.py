@@ -75,7 +75,13 @@ async def test_repair_retry_recovers_from_broken_json():
     assert outcome.verdict.status is VerdictStatus.OK
     assert outcome.verdict.attempt == 2
     assert len(provider.requests) == 2
-    assert "不正でした" in provider.requests[1].user
+    repair = provider.requests[1].user
+    assert "previous output was invalid" in repair
+    # 元のタスク (コード) を含め、前回の出力はデリミタで囲む (#293, #295)
+    assert repair.startswith(provider.requests[0].user.rstrip())
+    assert (
+        "<<<UNTRUSTED_OUTPUT>>>\nこれは JSON ではありません\n<<<END_UNTRUSTED_OUTPUT>>>" in repair
+    )
 
 
 async def test_repair_is_attempted_only_once():

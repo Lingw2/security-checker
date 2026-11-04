@@ -148,7 +148,7 @@ class Reviewer:
                     usage=usage,
                 )
             repair_user = prompts.render_repair(
-                violation.raw_text, str(violation), schema, self.language
+                violation.raw_text, str(violation), schema, self.language, original_user=user
             )
             if before_send is not None:
                 try:
