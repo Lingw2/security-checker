@@ -113,3 +113,42 @@ def test_installer_rejects_malformed_versions_before_downloading(tmp_path, value
     assert result.returncode == 2
     assert "版の指定が不正" in result.stderr
     assert not (tmp_path / "bin").exists()
+
+
+def test_action_pins_the_same_uv_as_the_dockerfile():
+    """action の uv の版を検査対象の設定や実行時の最新版で決めさせない (#248)."""
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    match = re.search(r"ghcr\.io/astral-sh/uv:(\d+\.\d+\.\d+)@", dockerfile)
+    assert match is not None
+    loaded: dict[str, Any] = yaml.safe_load((ROOT / "action.yml").read_text(encoding="utf-8"))
+    setup = next(
+        step for step in loaded["runs"]["steps"] if "astral-sh/setup-uv" in step.get("uses", "")
+    )
+    assert setup["with"]["version"] == match.group(1)
+    assert setup["with"]["working-directory"] == "${{ github.action_path }}"
+
+
+def test_action_does_not_override_the_configured_fail_on():
+    """fail-on の既定は空. 設定ファイル・プリセットの policy.fail_on を上書きしない (#249)."""
+    loaded: dict[str, Any] = yaml.safe_load((ROOT / "action.yml").read_text(encoding="utf-8"))
+    assert loaded["inputs"]["fail-on"]["default"] == ""
+
+
+def test_installer_refuses_non_linux(tmp_path, monkeypatch):
+    """Linux 用バイナリしか取れない. 別の OS では先に止める (#648)."""
+    if os.name != "posix" or shutil.which("bash") is None:
+        pytest.skip("bash が必要")
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    (fake / "uname").write_text("#!/bin/sh\necho Darwin\n", encoding="utf-8")
+    (fake / "uname").chmod(0o755)
+    env = {**os.environ, "PATH": f"{fake}{os.pathsep}{os.environ['PATH']}"}
+    completed = subprocess.run(
+        ["bash", str(INSTALLER), str(tmp_path / "out")],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    assert completed.returncode == 2
+    assert "Linux 専用" in completed.stderr

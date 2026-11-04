@@ -19,7 +19,7 @@
 # 設計書 §21.1 は Docker コンテナアクションを最終形としているが、GHCR へのイメージ公開 (P6) までは
 # composite で配る。composite なら Code Scanning へのアップロードに公式の upload-sarif を使える。
 name: security-checker
-description: スキャナの検出を LLM でレビューし、PR コメントと SARIF (Code Scanning) で報告する
+description: スキャナの検出を LLM でレビューし、PR コメントと SARIF (Code Scanning) で報告する (Linux ランナー専用)
 author: Sh1n1230
 branding:
   icon: shield
@@ -44,8 +44,10 @@ inputs:
       fork からの PR ではシークレットが渡らないため、常にスキャンのみになる
     default: auto
   fail-on:
-    description: 'この重大度以上で失敗させる: critical | high | medium | low | none'
-    default: high
+    description: >-
+      この重大度以上で失敗させる: critical | high | medium | low | info | none。
+      空なら設定ファイル・プリセットの policy.fail_on (既定 high) に従う
+    default: ""
   min-score:
     description: このスコア未満なら失敗させる (0 で判定しない。v1 と同じ入力名)
     default: "0"
@@ -119,7 +121,48 @@ outputs:
 runs:
   using: composite
   steps:
+    # typo を黙って既定の動作にしない. 何もインストールする前に確かめる
+    - name: 入力を検証
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+        REVIEW: ${{ inputs.review }}
+        FAIL_ON: ${{ inputs.fail-on }}
+        COMMENT: ${{ inputs.comment }}
+        UPLOAD_SARIF: ${{ inputs.upload-sarif }}
+        UNTRUSTED: ${{ inputs.untrusted-target }}
+        MIN_SCORE: ${{ inputs.min-score }}
+      run: |
+        set -uo pipefail
+        bad=0
+        check() { # 入力名 値 許す値の正規表現
+          if ! [[ "${2,,}" =~ ^($3)$ ]]; then
+            echo "::error::inputs.$1 の値 '$2' は使えません (使える値: ${3//|/ \/ })"
+            bad=1
+          fi
+        }
+        check mode "$MODE" 'auto|full|diff'
+        check review "$REVIEW" 'auto|true|false'
+        check fail-on "$FAIL_ON" '|critical|high|medium|low|info|none'
+        check comment "$COMMENT" 'true|false'
+        check upload-sarif "$UPLOAD_SARIF" 'true|false'
+        check untrusted-target "$UNTRUSTED" 'true|false'
+        if ! [[ "$MIN_SCORE" =~ ^[0-9]+$ ]] || (( MIN_SCORE > 100 )); then
+          echo "::error::inputs.min-score は 0〜100 の整数です: '$MIN_SCORE'"
+          bad=1
+        fi
+        if [[ "$RUNNER_OS" != Linux ]]; then
+          echo "::error::この action は Linux ランナー専用です (現在: $RUNNER_OS)。runs-on: ubuntu-latest などを使ってください"
+          bad=1
+        fi
+        [[ $bad -eq 0 ]] || exit 2
+
+    # uv の版を固定し、検査対象の pyproject.toml (required-version など) を読ませない。
+    # 版は Dockerfile の uv イメージとそろえる (tests/unit/test_scanner_versions.py が検査する)
     - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      with:
+        version: "0.12.23"
+        working-directory: ${{ github.action_path }}
 
     - name: スキャナと security-checker をインストール
       shell: bash
@@ -186,6 +229,11 @@ runs:
           true) command=review ;;
           auto) [[ "$reviewers" != "0" ]] && command=review ;;
         esac
+        if [[ "$fork" == true ]]; then
+          # fork PR のスキャンだけの結果は誤検知を含む候補. ここではゲートにせず、
+          # レビュー済みの結果で判定する workflow_run 側に任せる (docs/github-actions.md §5)
+          echo "fail-on=none" >> "$GITHUB_OUTPUT"
+        fi
         if [[ "$command" == review && "$fork" == true ]]; then
           # fork PR にはシークレットが渡らない。黙って 0 件にせず、スキャンのみと明示する (§21.2)
           command=scan
@@ -193,6 +241,7 @@ runs:
             echo '> [!WARNING]'
             echo '> fork からの PR のため、LLM レビューを行わずスキャンのみを実行しました。'
             echo '> スキャナの検出は判定前の候補で、誤検出を含みます。'
+            echo '> そのためこのジョブでは fail-on で落とさず、ゲートは workflow_run 側 (レビュー済み) で判定します。'
           } >> "$GITHUB_STEP_SUMMARY"
         fi
         echo "command=$command" >> "$GITHUB_OUTPUT"
@@ -210,14 +259,16 @@ runs:
         PRESET: ${{ inputs.preset }}
         TARGET: ${{ inputs.target }}
         MODE: ${{ inputs.mode }}
-        FAIL_ON: ${{ inputs.fail-on }}
+        FAIL_ON: ${{ steps.ctx.outputs.fail-on || inputs.fail-on }}
         MIN_SCORE: ${{ inputs.min-score }}
         BASE: ${{ inputs.base }}
       run: |
         set -uo pipefail
         dir="$RUNNER_TEMP/security-checker"
         echo "dir=$dir" >> "$GITHUB_OUTPUT"
-        args=("$COMMAND" "$TARGET" -o "$dir" -f terminal -f json -f markdown -f sarif --fail-on "$FAIL_ON")
+        args=("$COMMAND" "$TARGET" -o "$dir" -f terminal -f json -f markdown -f sarif)
+        # 空なら渡さない. 設定ファイル・プリセットの policy.fail_on を action が上書きしない
+        [[ -n "$FAIL_ON" ]] && args+=(--fail-on "${FAIL_ON,,}")
         [[ -n "$CONFIG" ]] && args+=(--config "$CONFIG")
         [[ -n "$PRESET" ]] && args+=(--preset "$PRESET")
         [[ "$MIN_SCORE" != "0" ]] && args+=(--min-score "$MIN_SCORE")
@@ -293,7 +344,13 @@ runs:
         ok=$(python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); print(all(i.get("executionSuccessful") for r in s["runs"] for i in r["invocations"]))' "$sarif")
         if [[ "$ok" != "True" ]]; then
           echo "::error::失敗した、または導入されていないスキャナがあるため SARIF をアップロードしません (既存の alert が誤って閉じるのを防ぐ)"
-          exit 0
+          {
+            echo '> [!CAUTION]'
+            echo '> 失敗した、または導入されていないスキャナがあるため、SARIF を Code Scanning にアップロードしていません。'
+            echo '> この run の結果は Security タブに反映されていません。'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # policy.strict: false でもジョブを緑にしない (アップロードしなかったことに気づけない)
+          exit 1
         fi
         echo "upload=true" >> "$GITHUB_OUTPUT"
 

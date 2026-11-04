@@ -52,8 +52,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq jq
+          # jq はランナーに入っている. 毎回 apt で入れ直さず、無ければはっきり止める
+          command -v jq >/dev/null || { echo "::error::jq がありません"; exit 1; }
           # action.yml と同じく、版と sha256 を固定して取得する (scripts/scanner-versions.sh)
           BIN="$RUNNER_TEMP/security-checker-bin"
           scripts/install-scanners.sh "$BIN"

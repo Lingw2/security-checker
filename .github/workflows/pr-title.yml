@@ -1,0 +1,39 @@
+# PR タイトルの形式 (Conventional Commits) の検査。squash 後のコミットメッセージになる。
+# タイトルを直したら検査し直すよう edited でも起動する。ci.yml に edited を足すと
+# タイトルの編集のたびに全ジョブが走るので、別の workflow に分けている。
+# pull_request_target は使わない (docs/github-actions.md §5 の方針)。
+name: PR title
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-title-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  pr-title:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read # PR タイトルの取得のみ。書き込みは与えない
+    steps:
+      - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            perf
+            docs
+            refactor
+            test
+            chore
+          # スコープは領域名。省略も許す (リポジトリ全体に及ぶ変更があるため)
+          requireScope: false
+          # 「feat: Add ...」のような大文字始まりを弾かない (日本語タイトルも許すため)
+          subjectPattern: ".+"

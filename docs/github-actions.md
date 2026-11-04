@@ -1,5 +1,7 @@
 # GitHub Actions で使う
 
+action は **Linux ランナー専用**です (スキャナの Linux 用バイナリを入れるため)。`runs-on: ubuntu-latest` などで使ってください。
+
 security-checker を PR ごとに動かし、結果を 3 か所に出す方法です。
 
 | 出し先 | 中身 | 役割 |
@@ -52,7 +54,7 @@ jobs:
 | `target` | `.` | 検査対象ディレクトリ。inline コメントを使うならリポジトリ直下のままにする |
 | `mode` | `auto` | `auto` (PR は差分のみ・push は全件) / `full` / `diff` |
 | `review` | `auto` | `auto` / `true` / `false`。fork PR では常にスキャンのみ |
-| `fail-on` | `high` | この重大度以上の `confirmed` / `likely` で失敗 (`none` で判定しない) |
+| `fail-on` | (設定の値) | この重大度以上の `confirmed` / `likely` で失敗 (`none` で判定しない)。空なら設定ファイル・プリセットの `policy.fail_on` (既定 `high`) に従う。fork PR のスキャンのみの run では判定しない (§5) |
 | `min-score` | `0` | このスコア未満で失敗 (0 で判定しない。スコアは補助指標) |
 | `comment` | `true` | PR に sticky サマリと inline コメントを投稿する |
 | `upload-sarif` | `true` | SARIF を Code Scanning に登録する |
@@ -142,6 +144,9 @@ GITHUB_TOKEN=... security-checker comment .security-checker/report.json --repo o
   ジョブサマリにそう書きます (黙って 0 件にはしません)。
 - **`GITHUB_TOKEN` が read-only になります。** コメントも SARIF のアップロードもできないので、
   どちらもスキップして理由を残します。
+- **`fail-on` で落としません。** スキャンだけの結果は誤検知を含む候補なので、ゲートは
+  レビュー済みの結果で判定する `workflow_run` 側に任せます。fork PR をマージの条件にするなら、
+  先に下の publish 側を用意してください。
 
 fork PR にもコメントと Code Scanning の結果を付けたいときは、
 [ci/security-fork-publish.yml](../ci/security-fork-publish.yml) を追加します (`workflow_run` パターン)。
@@ -208,8 +213,8 @@ Ruleset では Alerts の閾値に `Errors` を選び、Security alerts の閾�
 - **スキャナが 1 つでも失敗した run、または有効にしたスキャナが入っていない run の SARIF は
   アップロードしません。** 一部の結果が欠けた SARIF を上げると、既存の alert が「解決済み」として
   一括で閉じるためです。対象が無いだけの skip (osv-scanner のマニフェストが無いなど) は止めません。
-  `invocations[].executionSuccessful: false` で判別でき、action はこれを見てスキップします。
-  exit code 3 で status check も落ちます。
+  `invocations[].executionSuccessful: false` で判別でき、action はこれを見てスキップし、
+  Step Summary に書いたうえでジョブを失敗させます (`policy.strict: false` でも緑にしません)。
 - diff モードでレビューしなかった候補も `note` で出します。出さなければ既存 alert が閉じ、
   元の level で出せば既定ブランチの判定と食い違うためです。
 

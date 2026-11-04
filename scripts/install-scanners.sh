@@ -23,6 +23,12 @@ if [[ $# -ne 1 ]]; then
   echo "使い方: $0 <インストール先ディレクトリ>" >&2
   exit 2
 fi
+if [[ "$(uname -s)" != Linux ]]; then
+  # 取得するのは Linux 用のバイナリだけ. 別の OS では分かりにくい形で落ちるので先に止める
+  echo "::error::scripts/install-scanners.sh は Linux 専用です (現在: $(uname -s))。" \
+    "macOS / Windows では各スキャナを手元のパッケージマネージャで入れてください" >&2
+  exit 2
+fi
 bin_dir=$1
 
 # validate <名前> <指定>: 空・latest・X.Y.Z (先頭の v は可) 以外は止める。取得を始める前にすべて確かめる

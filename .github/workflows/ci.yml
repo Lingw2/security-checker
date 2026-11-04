@@ -11,36 +11,15 @@ on:
 permissions:
   contents: read
 
+# PR では新しい push で古い run を止める。main への push は止めない
+# (続けてマージすると、前のコミットの CI が取り消されて結果が残らないため)
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # squash merge 後のコミットメッセージは PR タイトルになる (設計書 §31.1)。
   # release-please が CHANGELOG を生成できるよう、タイトルの形式をここで強制する。
-  pr-title:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      pull-requests: read # PR タイトルの取得のみ。書き込みは与えない
-    steps:
-      - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          types: |
-            feat
-            fix
-            perf
-            docs
-            refactor
-            test
-            chore
-          # スコープは領域名。省略も許す (リポジトリ全体に及ぶ変更があるため)
-          requireScope: false
-          # 「feat: Add ...」のような大文字始まりを弾かない (日本語タイトルも許すため)
-          subjectPattern: ".+"
-
   quality:
     runs-on: ubuntu-latest
     strategy:
