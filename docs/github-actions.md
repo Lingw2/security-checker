@@ -71,7 +71,9 @@ jobs:
 | 0 | 問題なし |
 | 1 | ポリシー違反 (`fail-on` 以上の confirmed / likely、または `min-score` 未満) |
 | 2 | 設定エラー |
-| 3 | 実行エラー (スキャナの失敗など。`policy.strict: true` のとき) |
+| 3 | 実行エラー (スキャナの失敗・Reviewer の無効化・未レビューの候補など。`policy.strict: true` のとき) |
+
+コマンドごとの詳しい条件は [exit-codes.md](exit-codes.md) にまとめています。
 
 `review_required` (Reviewer の判断が割れたもの) は**ジョブを落としません**。
 サマリと Security タブには残るので、人間が確認してください。

@@ -146,10 +146,68 @@ we will say so. See [docs/evaluation.md](docs/evaluation.md).
 configured. Detected secret values are masked before they are stored or sent. `scan` sends nothing.
 Details: [docs/security-model.md](docs/security-model.md).
 
+## Exit codes
+
+| code | meaning |
+|---|---|
+| 0 | no policy violation |
+| 1 | policy violation (`fail_on` or above, or score below `min_score`) |
+| 2 | configuration error — stops before anything is sent |
+| 3 | execution error — with `strict` (default): a scanner failed, a reviewer was disabled, review stopped early, or candidates were left unreviewed |
+
+"Found vulnerabilities" (1) and "the tool broke" (3) are never mixed. Per-command details:
+[docs/exit-codes.md](docs/exit-codes.md).
+
+## Host-audit scripts (contrib/host-audit/)
+
+Standalone, read-only scripts (carried over from v1, independent of the Python package) that audit *your
+machine and workflow* rather than a codebase. Each exits 1 when it finds a problem, so they fit cron or CI.
+
+| script | what it checks |
+|---|---|
+| `audit_macos.sh` / `windows/audit_windows.ps1` | OS settings (FileVault / BitLocker, firewall, SIP / Defender, sharing) |
+| `check_ports.sh` / `windows/check_ports.ps1` | listening ports and anything exposed beyond localhost |
+| `check_permissions.sh [dir]` / `windows/check_permissions.ps1` | `~/.ssh` and credential file permissions, world-writable files |
+| `check_shell_env.sh` / `windows/check_shell_env.ps1` | secrets leaked into shell history, dotfiles and environment variables |
+| `check_git_history.sh <repo>` | secrets anywhere in git history, including deleted ones |
+| `check_tls_cert.sh <domain>` / `windows/check_tls_cert.ps1` | certificate expiry and acceptance of TLS 1.0 / 1.1 |
+| `check_updates.sh` / `windows/check_updates.ps1` | pending OS / package-manager updates and backup status |
+| `install_hooks.sh [repo]` | installs git hooks: pre-commit secret scan, pre-push blocks direct and force pushes to protected branches |
+| `run_all.sh` / `windows/run_all.ps1` | runs the environment checks above in one go |
+
+## Development guardrails
+
+Dangerous git operations are blocked in three layers, ordered by how hard they are to bypass:
+
+| layer | applies to | bypass | where |
+|---|---|---|---|
+| 1. GitHub Ruleset | everyone, every tool (server side) | **none** | GitHub settings |
+| 2. git hooks | every local operation, human or agent | `--no-verify` | `contrib/host-audit/hooks/` |
+| 3. agent permission settings | that agent only | easily, by rephrasing the command | `.claude/settings.json` |
+
+Blocking direct and force pushes to protected branches lives in layers 1 and 2 only — pattern-matching
+command strings (layer 3) is trivially evaded by things like `git -C <path> push --force origin main`.
+`.claude/settings.json` is declarations only and ships no executable hook scripts, since those would run on
+the machine of anyone who clones and opens the repository.
+
+## Claude Code skills (skills/)
+
+Two model-agnostic skills let you ask for a check or a fix in plain language:
+
+```sh
+cp -r skills/security-check skills/security-fix ~/.claude/skills/
+```
+
+- **security-check** — runs `security-checker scan` / `review` and explains the results
+- **security-fix** — prioritises the findings and walks through safe fixes
+
+Automated checks cover only part of the picture; review authentication and authorisation design manually
+with [checklist/CHECKLIST.md](checklist/CHECKLIST.md).
+
 ## Contributing / License
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). MIT licensed.
+See [CONTRIBUTING.md](CONTRIBUTING.md), [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) and
+[SECURITY.md](SECURITY.md) (**report vulnerabilities privately, not in public issues**). All documentation is
+indexed in [docs/README.md](docs/README.md). Issues and PRs are welcome in English or Japanese. MIT licensed.
 
-The original v1 (bash / PowerShell) was removed after v1.1.0. Standalone host-audit scripts (macOS / Windows
-settings, open ports, shell history) live in [contrib/host-audit/](contrib/host-audit/) and are documented in
-[README.ja.md](README.ja.md).
+The original v1 (bash / PowerShell) was removed after v1.1.0; see the `v1.1.0` tag if you need it.

@@ -1,12 +1,26 @@
 # v2 残作業と手続き書
 
-- 作成日: 2026-09-11
+- 作成日: 2026-09-11 / 最終更新: 2026-11-04
 - 基準: `origin/main` = `1afcd85`（#2 で P1〜P2.5 を squash merge 済み）
 - 照合元: [DESIGN.md](DESIGN.md) §32 移行計画・§33 リスク
 
 ---
 
-## 0. 現状（2026-10-04 時点の実測）
+## 0. 現状（2026-11-04 時点の実測）
+
+| 項目 | 状態 |
+|---|---|
+| リリース | `v2.1.0` を GitHub Release で公開済み。release-please のリリース PR (#100, `2.2.0`) が待機中。PyPI・GHCR は未公開 (変数で無効化中) |
+| フェーズ | P1〜P5 完了。P6 は実 LLM での eval と PyPI / GHCR 公開が残り。P7 未着手 |
+| 品質 | pytest 978 件 (POSIX 以外向けと実スキャナ未導入時の skip を除きすべて成功) / カバレッジ 95% / mypy --strict・ruff エラーなし |
+| ドキュメント | 目次 [README.md](README.md)・終了コード [exit-codes.md](exit-codes.md) を追加。英語 README に終了コード・host-audit・ガードレール・スキルの節を追加 |
+| ブランチ | D13 の古いブランチ (backup/*・feat/v2-*・docs/design-v2) は削除済み。残っているのは開いている PR のブランチだけ |
+| Issue / PR | Issue が約 480 件 (大半はコードを機械的に読んで洗い出した `good first issue` / テストの穴)。外部からの PR が約 20 件レビュー待ち |
+| 残っている人間の作業 | §2 の D1・D2・D12、§3 Step 6 の 1・3・4、Step 7。外部 PR のレビュー |
+
+以下は 2026-10-04 時点の記録。
+
+## 0''. 現状（2026-10-04 時点の実測）
 
 | 項目 | 状態 |
 |---|---|
@@ -95,7 +109,7 @@ P4 で `sarif`・`diff`・`github.*` は実装し、警告から外した。
 | **D10** | **ドキュメントの正典言語**（§30.1 は英語を正典としている） | **決定（2026-09-15）: 当面は日本語のまま。** 英語化は P6 でまとめて行う | P6 |
 | **D11** | **v2.0 に同梱するプリセット** | **決定（2026-09-15）: 客観条件を満たすものを同梱する。** 対象は `process`: codex CLI・claude CLI、`http`: OpenAI 互換エンドポイント。アルファベット順・順位づけなし | P3 中 |
 | **D12** | **既定の Reviewer 数・集約戦略** | 決めない。D4 の評価結果を見てから決める（R2） | P6 |
-| **D13** | **不要ブランチの削除。** `backup/pre-secret-fix-20260906-184124`・`backup/pre-squash-20260830`・`feat/v2-p1-skeleton`・`docs/design-v2`・`feat/v2-core` | 中身が `origin/main` に入っていることを確認したうえで削除。backup/* は念のため 1 か月残してもよい | いつでも |
+| ~~**D13**~~ | **✅ 完了（2026-11-04 確認）。** 不要ブランチの削除。 `backup/pre-secret-fix-20260906-184124`・`backup/pre-squash-20260830`・`feat/v2-p1-skeleton`・`docs/design-v2`・`feat/v2-core` | 中身が `origin/main` に入っていることを確認したうえで削除。backup/* は念のため 1 か月残してもよい | いつでも |
 
 ---
 
@@ -117,7 +131,7 @@ git diff --stat main feat/v2-p1-skeleton
 git diff --stat main docs/design-v2
 ```
 
-- [ ] D9: GitHub の Settings → Security → Private vulnerability reporting を有効化
+- [x] D9: GitHub の Settings → Security → Private vulnerability reporting を有効化
 - [ ] D1: PyPI で `security-checker-ai` を確保
 - [ ] `reports/`（v1 が他プロジェクトを検査した結果。git 管理外）をローカルから削除（§0 前提の確認）
 

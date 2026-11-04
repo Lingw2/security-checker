@@ -102,7 +102,7 @@
 | `fail_on` | `high` | この重大度以上で exit 1。`none` で判定しない |
 | `fail_on_status` | `[confirmed, likely]` | 失敗させる status |
 | `min_confidence` | `0.5` | これ未満の confirmed / likely は `review_required` に落とす |
-| `strict` | `true` | スキャナの失敗、判定不能、Reviewer の無効化、予算や上限によるレビューの停止、未レビューの候補を exit 3 にする |
+| `strict` | `true` | スキャナの失敗、判定不能、Reviewer の無効化、予算や上限によるレビューの停止、未レビューの候補を exit 3 にする ([exit-codes.md](exit-codes.md)) |
 | `baseline` | | baseline ファイル (設定ファイルの場所からの相対パス) |
 | `min_score` | | スコアの下限 (補助指標) |
 

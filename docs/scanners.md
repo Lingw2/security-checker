@@ -26,7 +26,7 @@ GitHub Action（`action.yml`）・Docker イメージ・このリポジトリの
 |---|---|---|
 | `ok` | 実行できた (0 件を含む) | |
 | `skipped` | 導入されていない・対象が無い | 警告。スコアは `partial` |
-| `failed` | 異常終了・タイムアウト・出力が壊れている | **エラー**。`strict` なら exit 3。SARIF はアップロードしない |
+| `failed` | 異常終了・タイムアウト・出力が壊れている | **エラー**。`strict` なら exit 3 ([exit-codes.md](exit-codes.md))。SARIF はアップロードしない |
 
 v1 には「スキャナが失敗しても 0 件の成功として扱われ、満点に見える」欠陥がありました。
 v2 は `skipped` と `failed` を型で分け、どちらもレポートの冒頭に出します。

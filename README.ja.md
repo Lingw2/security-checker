@@ -146,7 +146,9 @@ output:
 | 0 | ポリシー違反なし |
 | 1 | `fail_on` 以上の検出、または `min_score` 未満 |
 | 2 | 設定エラー |
-| 3 | 実行エラー(`--strict` 時にスキャナが失敗した) |
+| 3 | 実行エラー(`--strict` 時にスキャナの失敗・Reviewer の無効化・未レビューの候補がある) |
+
+コマンドごとの条件は [docs/exit-codes.md](docs/exit-codes.md) にまとめています。
 
 **1 と 3 を分けているのが v1 との最大の違いです。** v1 には「スキャナが失敗しても 0 件成功として扱われ、
 スコアが満点に見える」欠陥がありました。v2 は `skipped`(未導入)と `failed`(異常終了)を区別し、
@@ -283,6 +285,7 @@ cp -r skills/security-check skills/security-fix ~/.claude/skills/
   プリセットの足し方（コードを書かずに新しい LLM を足す方法）
 - [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) — 行動規範（Contributor Covenant v2.1）
 - [SECURITY.md](SECURITY.md) — **脆弱性は公開 Issue ではなく非公開で報告してください**
+- [docs/README.md](docs/README.md) — ドキュメントの目次
 - [docs/DESIGN.md](docs/DESIGN.md) — 「なぜそうなっているか」はここに書いてあります
 - [docs/NEXT-STEPS.md](docs/NEXT-STEPS.md) — 残作業と、決める必要があること
 
