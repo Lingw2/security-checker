@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import subprocess
+
 import pytest
 import yaml
 from typer.testing import CliRunner
@@ -123,3 +125,87 @@ def test_init_suggests_local_when_the_shared_config_exists(tmp_path):
     result = runner.invoke(app, ["init", str(tmp_path), "--command", "my-cmd"])
     assert result.exit_code == ExitCode.CONFIG_ERROR
     assert "--local" in result.stdout + str(result.stderr)
+
+
+# --- 非対話・--stdout・http の model・名前の重複・.gitignore (#195, #208〜#212) -------
+
+
+def test_init_without_stdin_stops_with_guidance(tmp_path, one_detection):
+    """標準入力が無いと番号を尋ねても答えが返らない. Aborted (exit 1) にしない (#208)."""
+    result = runner.invoke(app, ["init", str(tmp_path)], input=None)
+    assert result.exit_code == ExitCode.CONFIG_ERROR
+    assert "--yes" in result.stderr
+
+
+def test_init_stdout_writes_only_yaml_to_stdout(tmp_path, one_detection):
+    result = runner.invoke(app, ["init", str(tmp_path), "--yes", "--stdout"])
+    assert result.exit_code == ExitCode.OK, result.output
+    payload = yaml.safe_load(result.stdout)
+    assert payload["reviewers"][0]["name"] == "detected"
+    assert "環境を検出しています" in result.stderr
+
+
+@pytest.fixture
+def http_detection(monkeypatch):
+    detection = Detection(
+        transport="http",
+        name="openai",
+        available=True,
+        detail="テスト用",
+        config={"name": "openai", "transport": "http", "preset": "openai"},
+    )
+    monkeypatch.setattr("security_checker.cli.detect_all", lambda: [detection])
+
+
+def test_init_http_detection_gets_the_given_model(tmp_path, http_detection):
+    result = runner.invoke(app, ["init", str(tmp_path), "--yes", "--model", "m-1"])
+    assert result.exit_code == ExitCode.OK, result.output
+    payload = yaml.safe_load((tmp_path / "security-checker.yml").read_text(encoding="utf-8"))
+    assert payload["reviewers"][0]["model"] == "m-1"
+
+
+def test_init_http_detection_without_a_model_says_so(tmp_path, http_detection):
+    result = runner.invoke(app, ["init", str(tmp_path), "--yes"])
+    assert result.exit_code == ExitCode.OK, result.output
+    payload = yaml.safe_load((tmp_path / "security-checker.yml").read_text(encoding="utf-8"))
+    assert payload["reviewers"][0]["model"] == "<model-id>"
+    assert "書き換えてください" in result.stdout
+    # 生成した設定はそのまま読める
+    Config.model_validate(payload)
+
+
+def test_init_command_with_a_detected_name_gets_a_unique_name(tmp_path, one_detection):
+    result = runner.invoke(app, ["init", str(tmp_path), "--yes", "--command", "detected --x"])
+    assert result.exit_code == ExitCode.OK, result.output
+    payload = yaml.safe_load((tmp_path / "security-checker.yml").read_text(encoding="utf-8"))
+    assert [block["name"] for block in payload["reviewers"]] == ["detected", "detected-2"]
+
+
+def test_init_explicit_name_that_collides_is_refused(tmp_path, one_detection):
+    result = runner.invoke(
+        app, ["init", str(tmp_path), "--yes", "--command", "x", "--name", "detected"]
+    )
+    assert result.exit_code == ExitCode.CONFIG_ERROR
+    assert "--name" in result.stderr
+
+
+def test_init_local_warns_when_git_does_not_ignore_it(tmp_path):
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    result = runner.invoke(app, ["init", str(tmp_path), "--command", "my-cmd", "--local"])
+    assert result.exit_code == ExitCode.OK
+    assert "git で無視されていません" in result.stdout
+    (tmp_path / ".gitignore").write_text("security-checker.local.yml\n", encoding="utf-8")
+    result = runner.invoke(
+        app, ["init", str(tmp_path), "--command", "my-cmd", "--local", "--force"]
+    )
+    assert "コミットされません" in result.stdout
+
+
+def test_windows_command_keeps_backslashes(monkeypatch):
+    from security_checker import cli
+
+    monkeypatch.setattr(cli.os, "name", "nt")
+    assert cli._split_command('"C:\\Program Files\\x\\cmd.exe" --flag') == [
+        "C:\\Program Files\\x\\cmd.exe",
+        "--flag",
+    ]

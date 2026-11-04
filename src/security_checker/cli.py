@@ -10,6 +10,7 @@ import asyncio
 import json
 import os
 import shlex
+import subprocess
 import sys
 import traceback
 from pathlib import Path
@@ -17,6 +18,7 @@ from typing import Annotated, Any, NoReturn
 
 import typer
 import yaml
+from pydantic import ValidationError
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
@@ -30,6 +32,7 @@ from security_checker.config.loader import (
     available_presets,
     load_config,
 )
+from security_checker.config.schema import Config
 from security_checker.context.budget import estimate_tokens
 from security_checker.context.redact import redact_known_patterns
 from security_checker.errors import ConfigError, ExitCode, SecurityCheckerError
@@ -606,6 +609,10 @@ def init(
     name: Annotated[
         str | None, typer.Option("--name", help="--command で作る Reviewer の名前")
     ] = None,
+    model: Annotated[
+        str | None,
+        typer.Option("--model", help="http の検出を採用するときの model (省略時は仮の値を書く)"),
+    ] = None,
     local: Annotated[
         bool,
         typer.Option(
@@ -625,7 +632,8 @@ def init(
     root = path.expanduser().resolve()
     if not root.is_dir():
         _fail(f"ディレクトリが見つかりません: {path}", ExitCode.CONFIG_ERROR)
-    console = _console()
+    # --stdout では標準出力を YAML だけにする (`> security-checker.yml` で使えるように)
+    console = _console(stderr=stdout)
 
     usable = _print_detections(console, detect_all())
     blocks: list[dict[str, Any]] = []
@@ -641,19 +649,39 @@ def init(
     elif usable and not yes:
         for index, item in enumerate(usable, start=1):
             console.print(f"    [bold]{index}[/bold]. {escape(item.name)} ({item.transport})")
-        answer = typer.prompt(
-            "Reviewer にするものを番号で (カンマ区切り・空欄で全部・'-' で選ばない)",
-            default="",
-            show_default=False,
-        ).strip()
+        try:
+            answer = typer.prompt(
+                "Reviewer にするものを番号で (カンマ区切り・空欄で全部・'-' で選ばない)",
+                default="",
+                show_default=False,
+                err=stdout,
+            ).strip()
+        except typer.Abort:
+            # 標準入力が無い (CI・パイプ) と、尋ねても答えが返らない. 黙って Aborted にしない
+            _fail(
+                "番号を尋ねられませんでした (標準入力がありません)。"
+                "検出したものをすべて採用するなら --yes、使わないなら --command を指定してください",
+                ExitCode.CONFIG_ERROR,
+            )
         usable = _select(usable, answer, console)
     blocks.extend(dict(item.config) for item in usable)
+    placeholder_models = _fill_http_models(blocks, model)
 
     if command is not None:
-        argv = shlex.split(command)
+        argv = _split_command(command)
         if not argv:
             _fail("--command が空です", ExitCode.CONFIG_ERROR)
-        blocks.append(_reviewer_block(name or Path(argv[0]).name, argv))
+        reviewer_name = name or Path(argv[0]).name
+        taken = {str(block["name"]) for block in blocks}
+        if reviewer_name in taken:
+            if name is not None:
+                _fail(
+                    f"Reviewer '{name}' は検出したプリセットと名前が重複しています。"
+                    "--name で別の名前を指定してください",
+                    ExitCode.CONFIG_ERROR,
+                )
+            reviewer_name = _unique_name(reviewer_name, taken)
+        blocks.append(_reviewer_block(reviewer_name, argv))
 
     if not blocks:
         console.print(
@@ -665,12 +693,24 @@ def init(
         )
         raise typer.Exit(code=int(ExitCode.OK))
 
+    generated = {"version": 1, "reviewers": blocks}
+    try:
+        # 直後の review / providers check で読めない設定を書かない
+        Config.model_validate(generated)
+    except ValidationError as exc:
+        _fail(f"生成した設定が不正です: {exc}", ExitCode.CONFIG_ERROR)
     document = INIT_HEADER + yaml.safe_dump(
-        {"version": 1, "reviewers": blocks},
+        generated,
         allow_unicode=True,
         sort_keys=False,
         default_flow_style=False,
     )
+    for reviewer_name in placeholder_models:
+        console.print(
+            f"[yellow]Reviewer '{escape(reviewer_name)}' の model は仮の値 "
+            f"({PLACEHOLDER_MODEL}) です。[/yellow]使うモデルの ID に書き換えてください "
+            "(または --model で指定してください)"
+        )
     if stdout:
         print(document)
         raise typer.Exit(code=int(ExitCode.OK))
@@ -690,11 +730,68 @@ def init(
     destination.write_text(document, encoding="utf-8")
     console.print(f"[green]書き出しました[/green]: {escape(str(destination))}")
     if local:
-        console.print(
-            "[dim]このファイルは共有設定に後勝ちで重なります。"
-            ".gitignore 済みなのでコミットされません[/dim]"
-        )
+        console.print("[dim]このファイルは共有設定に後勝ちで重なります。[/dim]")
+        if _git_ignores(root, destination):
+            console.print("[dim].gitignore で無視されるため、コミットされません[/dim]")
+        else:
+            # 個人の Reviewer (コマンドやエンドポイント) を誤ってコミットさせない
+            console.print(
+                f"[yellow]{escape(destination.name)} は git で無視されていません。[/yellow]"
+                f".gitignore に次の行を足してください:\n  {escape(destination.name)}"
+            )
     console.print("次: [bold]security-checker review --dry-run[/bold] で送信内容を確認できます")
+
+
+PLACEHOLDER_MODEL = "<model-id>"
+
+
+def _fill_http_models(blocks: list[dict[str, Any]], model: str | None) -> list[str]:
+    """http の検出に model を入れる. 仮の値を入れた Reviewer の名前を返す.
+
+    プリセットはエンドポイントの「形」だけを持ち、model は持たない (§9.8)。
+    """
+    placeholders: list[str] = []
+    for block in blocks:
+        if block.get("transport") == "http" and "model" not in block:
+            block["model"] = model or PLACEHOLDER_MODEL
+            if model is None:
+                placeholders.append(str(block["name"]))
+    return placeholders
+
+
+def _split_command(command: str) -> list[str]:
+    """--command を argv に分ける. Windows ではバックスラッシュをエスケープとして読まない."""
+    if os.name != "nt":
+        return shlex.split(command)
+    return [_unquote(token) for token in shlex.split(command, posix=False)]
+
+
+def _unquote(token: str) -> str:
+    if len(token) >= 2 and token[0] == token[-1] and token[0] in "\"'":
+        return token[1:-1]
+    return token
+
+
+def _unique_name(base: str, taken: set[str]) -> str:
+    index = 2
+    while f"{base}-{index}" in taken:
+        index += 1
+    return f"{base}-{index}"
+
+
+def _git_ignores(root: Path, path: Path) -> bool:
+    """git が実際にそのファイルを無視するか. git が無い・リポジトリでないなら偽."""
+    try:
+        completed = subprocess.run(
+            ["git", "check-ignore", "-q", "--", str(path)],
+            cwd=root,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return completed.returncode == 0
 
 
 def _select(usable: list[Detection], answer: str, console: Console) -> list[Detection]:
@@ -828,7 +925,12 @@ def comment(
         Path, typer.Argument(help="review / scan が書き出した report.json")
     ] = Path(".security-checker/report.json"),
     config_path: Annotated[
-        Path | None, typer.Option("--config", "-c", help="github.* を読む設定ファイル")
+        Path | None,
+        typer.Option(
+            "--config",
+            "-c",
+            help="github.* を読む設定ファイル (省略時はカレントディレクトリから探す)",
+        ),
     ] = None,
     repo: Annotated[
         str | None, typer.Option("--repo", help="owner/name (既定: GITHUB_REPOSITORY)")
