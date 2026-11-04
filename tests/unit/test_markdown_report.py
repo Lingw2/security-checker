@@ -70,6 +70,8 @@ def verdict(reviewer: str, **overrides: Any) -> ReviewVerdict:
         "usage": Usage(input_tokens=100, output_tokens=50),
     }
     payload.update(overrides)
+    if not payload["vulnerable"] and "severity" not in overrides:
+        payload["severity"] = Severity.NONE
     return ReviewVerdict(**payload)
 
 

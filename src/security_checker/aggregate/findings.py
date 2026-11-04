@@ -77,7 +77,9 @@ def _not_reviewed(candidate: Candidate) -> Finding:
 
 def _merge_cwe(candidate: Candidate, verdicts: list[ReviewVerdict]) -> list[str]:
     merged = list(candidate.cwe)
-    for verdict in verdicts:
+    # 「脆弱ではない」と判定した Reviewer や、失敗した判定の CWE は根拠にならない
+    supporting = [v for v in verdicts if v.status is VerdictStatus.OK and v.vulnerable]
+    for verdict in supporting:
         for cwe in verdict.cwe:
             if cwe not in merged:
                 merged.append(cwe)

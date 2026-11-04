@@ -115,7 +115,9 @@ def test_ignore_matches_paths_and_rules():
     [
         ("x()  # security-checker: ignore[rules.a] reason=固定値のみ", ("rules.a",), "固定値のみ"),
         ("/* security-checker: ignore[a, b] reason=テスト用 */", ("a", "b"), "テスト用"),
-        ("# Security-Checker: ignore[] ", ("*",), None),
+        # 空の [] は何も抑制しない (全ルールなら ignore[*]) (#441)
+        ("# Security-Checker: ignore[] ", (), None),
+        ("# security-checker: ignore[*] reason=生成コード", ("*",), "生成コード"),
         ("<!-- security-checker: ignore[x] reason=y -->", ("x",), "y"),
     ],
 )

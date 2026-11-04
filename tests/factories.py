@@ -64,6 +64,8 @@ def make_verdict(reviewer: str, candidate_id: str = "c1", **overrides: Any) -> R
         "usage": Usage(input_tokens=100, output_tokens=50),
     }
     payload.update(overrides)
+    if not payload["vulnerable"] and "severity" not in overrides:
+        payload["severity"] = Severity.NONE  # 「脆弱ではない」の severity は none か info
     return ReviewVerdict(**payload)
 
 

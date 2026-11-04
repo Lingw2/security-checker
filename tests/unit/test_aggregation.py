@@ -31,11 +31,13 @@ def verdict(
     reviewer: str = "a",
     *,
     vulnerable: bool = True,
-    severity: Severity = Severity.HIGH,
+    severity: Severity | None = None,
     confidence: float = 0.9,
     status: VerdictStatus = VerdictStatus.OK,
     needs_more_context: list[str] | None = None,
 ) -> ReviewVerdict:
+    if severity is None:
+        severity = Severity.HIGH if vulnerable else Severity.NONE
     return ReviewVerdict(
         candidate_id="c1",
         reviewer=reviewer,

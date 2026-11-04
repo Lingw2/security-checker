@@ -27,21 +27,30 @@ class PolicyDecision:
 
 
 def evaluate(report: Report, policy: PolicyConfig) -> PolicyDecision:
-    """レポートをポリシーに照らして exit code を決める."""
-    reasons: list[str] = []
+    """レポートをポリシーに照らして exit code を決める.
 
+    exit code は「ツールが壊れた」(3) を優先するが、理由は成立したものをすべて残す
+    (壊れた検査と同時に見つかった違反を、直した後まで隠さない)。
+    """
+    errors: list[str] = []
     failed_runs = [run for run in report.scanners if run.status is ScanStatus.FAILED]
     if failed_runs and policy.strict:
         names = ", ".join(run.scanner for run in failed_runs)
-        return PolicyDecision(
-            exit_code=ExitCode.EXECUTION_ERROR,
-            reasons=[f"スキャナが失敗しました (strict): {names}"],
-        )
-
+        errors.append(f"スキャナが失敗しました (strict): {names}")
     if policy.strict:
-        incomplete = _incomplete_review(report)
-        if incomplete:
-            return PolicyDecision(exit_code=ExitCode.EXECUTION_ERROR, reasons=incomplete)
+        errors += _incomplete_review(report)
+
+    reasons = _violations(report, policy)
+    if errors:
+        return PolicyDecision(exit_code=ExitCode.EXECUTION_ERROR, reasons=[*errors, *reasons])
+    if reasons:
+        return PolicyDecision(exit_code=ExitCode.POLICY_VIOLATION, reasons=reasons)
+    return PolicyDecision(exit_code=ExitCode.OK, reasons=[])
+
+
+def _violations(report: Report, policy: PolicyConfig) -> list[str]:
+    """ポリシー違反 (exit 1) の理由."""
+    reasons: list[str] = []
 
     if report.findings:
         # レビュー済み: 「LLM が脆弱と判断したもの」だけをゲートにする
@@ -76,10 +85,7 @@ def evaluate(report: Report, policy: PolicyConfig) -> PolicyDecision:
 
     if policy.min_score is not None and report.score.value < policy.min_score:
         reasons.append(f"スコア {report.score.value} が下限 {policy.min_score} を下回りました")
-
-    if reasons:
-        return PolicyDecision(exit_code=ExitCode.POLICY_VIOLATION, reasons=reasons)
-    return PolicyDecision(exit_code=ExitCode.OK, reasons=[])
+    return reasons
 
 
 def _incomplete_review(report: Report) -> list[str]:

@@ -9,7 +9,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from security_checker.models.enums import Exploitability, Severity
 
@@ -103,6 +103,18 @@ class ReviewJudgement(BaseModel):
     reasoning: str = Field(max_length=1500)
     remediation: Remediation | None = None
     needs_more_context: list[str] = Field(default_factory=list, max_length=5)
+
+    @model_validator(mode="after")
+    def _severity_matches_the_verdict(self) -> ReviewJudgement:
+        """矛盾した判定 (脆弱なのに severity: none など) を通さない. 修復リトライで直させる."""
+        if self.vulnerable and self.severity is Severity.NONE:
+            raise ValueError(
+                "vulnerable: true のときは severity を none 以外 (info / low / medium / high / "
+                "critical) にしてください"
+            )
+        if not self.vulnerable and self.severity not in (Severity.NONE, Severity.INFO):
+            raise ValueError("vulnerable: false のときは severity を none か info にしてください")
+        return self
 
 
 class ReviewVerdict(ReviewJudgement):

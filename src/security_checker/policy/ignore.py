@@ -35,6 +35,8 @@ _ANNOTATION_RE = re.compile(
     r"security-checker:\s*ignore\[(?P<rules>[^\]]*)\](?:\s+reason=(?P<reason>.*))?",
     re.IGNORECASE,
 )
+#: .security-checker-ignore の行内コメントの始まり (空白類の後の、エスケープされていない #)
+_INLINE_COMMENT_RE = re.compile(r"\s+(?<!\\)#")
 #: 注釈の後ろに付きがちなコメント終端を理由から落とす
 _COMMENT_TAIL_RE = re.compile(r"\s*(?:\*/|-->|#}|%>)\s*$")
 #: 注釈の前に付くコメント記号. これ以外が残れば、その行にはコードがある
@@ -89,7 +91,12 @@ def parse_ignore_file(text: str, source: str = IGNORE_FILENAME) -> tuple[IgnoreF
     ignore = IgnoreFile()
     warnings: list[str] = []
     for number, raw in enumerate(text.splitlines(), start=1):
-        line = raw.split(" #", 1)[0].strip() if not raw.lstrip().startswith("#") else ""
+        # 行内コメントは空白類 (スペース・タブ) の後の # から. `\#` はリテラルの #
+        line = (
+            _INLINE_COMMENT_RE.split(raw, maxsplit=1)[0].replace("\\#", "#").strip()
+            if not raw.lstrip().startswith("#")
+            else ""
+        )
         if not line:
             continue
         if line.startswith("!"):
@@ -134,7 +141,8 @@ def parse_annotation(line: str) -> Annotation | None:
     reason = match.group("reason")
     if reason is not None:
         reason = _COMMENT_TAIL_RE.sub("", reason).strip() or None
-    return Annotation(rules=rules or ("*",), reason=reason)
+    # 空の ignore[] は何も抑制しない. 全ルールを外すなら ignore[*] と明示させる
+    return Annotation(rules=rules, reason=reason)
 
 
 class AnnotationReader:
@@ -143,6 +151,9 @@ class AnnotationReader:
     def __init__(self, root: Path) -> None:
         self._root = root.resolve()
         self._cache: dict[str, list[str] | None] = {}
+        #: 書き間違いの注釈 (空の ignore[] など). 黙って無視せずレポートに出す
+        self.warnings: list[str] = []
+        self._warned: set[tuple[str, int]] = set()
 
     def _lines(self, relative: str) -> list[str] | None:
         if relative not in self._cache:
@@ -172,6 +183,14 @@ class AnnotationReader:
                 if number != location.start_line and not is_annotation_only(line):
                     continue
                 annotation = parse_annotation(line)
+                if annotation is not None and not annotation.rules:
+                    if (location.path, number) not in self._warned:
+                        self._warned.add((location.path, number))
+                        self.warnings.append(
+                            f"{location.path}:{number}: 空の ignore[] は何も抑制しません。"
+                            "全ルールを外すなら ignore[*] と書いてください"
+                        )
+                    continue
                 if annotation is not None and any(
                     rule_matches(rule, candidate) for rule in annotation.rules
                 ):

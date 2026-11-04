@@ -164,8 +164,12 @@ rule:generic-api-key tests/**
 rule:GHSA-xxxx-xxxx-xxxx uv.lock
 ```
 
+`#` で始まる行と、空白 (スペースかタブ) の後の `#` から行末まではコメントです。パターンに `#` を
+含めたいときは `\#` と書きます。
+
 **コード内の注釈** — **理由の記述を必須**とし、理由が無いと警告します。行末に書くとその行にだけ効き、
 注釈だけの行に書くと次の行に効きます。行末の注釈は次の行には効きません。
+全ルールを外すなら `ignore[*]` と明示します。空の `ignore[]` は何も抑制せず、警告を出します。
 
 ```python
 subprocess.run(cmd, shell=True)  # security-checker: ignore[python.lang.security.audit.subprocess-shell-true] reason=cmd は固定文字列のみ

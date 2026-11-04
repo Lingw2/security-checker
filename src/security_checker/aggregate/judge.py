@@ -33,6 +33,16 @@ from security_checker.review.prompts import PeerOpinion
 STRATEGY = "judge"
 
 
+def _label(index: int) -> str:
+    """0 → A, 25 → Z, 26 → AA, 27 → AB … (表計算の列名と同じ). 27 人目から重複させない."""
+    letters = ""
+    index += 1
+    while index:
+        index, remainder = divmod(index - 1, 26)
+        letters = string.ascii_uppercase[remainder] + letters
+    return letters
+
+
 def anonymize(candidate_id: str, verdicts: Sequence[ReviewVerdict]) -> list[PeerOpinion]:
     """有効な判定だけを、名前を伏せて並べ替える."""
     valid = [verdict for verdict in verdicts if verdict.status is VerdictStatus.OK]
@@ -40,7 +50,7 @@ def anonymize(candidate_id: str, verdicts: Sequence[ReviewVerdict]) -> list[Peer
     random.Random(candidate_id).shuffle(shuffled)  # noqa: S311 - 暗号用途ではない
     return [
         PeerOpinion(
-            label=f"Reviewer {string.ascii_uppercase[index % 26]}",
+            label=f"Reviewer {_label(index)}",
             vulnerable=verdict.vulnerable,
             severity=verdict.severity.value,
             confidence=verdict.confidence,

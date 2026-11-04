@@ -101,4 +101,6 @@ def apply_suppressions(
                 "新しい候補として扱います"
             )
         kept.append(candidate)
+    if rules.annotations is not None:
+        warnings.extend(rules.annotations.warnings)
     return kept, suppressed, warnings
