@@ -81,3 +81,18 @@ def test_cli_default_emits_no_logs(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     result = CliRunner().invoke(app, ["scan", str(tmp_path), "-q"])
     assert "run.finish" not in result.stderr
+
+
+def test_text_values_with_spaces_or_equals_are_quoted():
+    """key=value の区切りを曖昧にしない. 改行でログ行を偽装させない (#663)."""
+    stream = io.StringIO()
+    log.configure(fmt="text", stream=stream)
+    log.event("e", reason="rate limit hit", expr="a=b", plain="ok", forged="x\nfake line", n=3)
+    lines = stream.getvalue().splitlines()
+    assert len(lines) == 1
+    line = lines[0]
+    assert 'reason="rate limit hit"' in line
+    assert 'expr="a=b"' in line
+    assert "plain=ok" in line
+    assert 'forged="x\\nfake line"' in line
+    assert "n=3" in line

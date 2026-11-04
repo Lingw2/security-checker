@@ -19,8 +19,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from security_checker.config.schema import Config
 from security_checker.context.builder import ContextBuilder
-from security_checker.context.slicer import resolve_inside
 from security_checker.context.facts import collect_repo_facts
+from security_checker.context.slicer import resolve_inside
 from security_checker.errors import ConfigError
 from security_checker.eval.dataset import Dataset, EvalCase
 from security_checker.eval.metrics import CaseOutcome, Metrics, evaluate_outcomes

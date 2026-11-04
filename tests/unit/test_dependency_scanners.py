@@ -252,3 +252,35 @@ async def test_trivy_with_only_refused_scanners_is_failed(fake_bin, tmp_path):
     )
     assert result.status is ScanStatus.FAILED
     assert "gitleaks" in (result.reason or "")
+
+
+async def test_osv_keeps_stderr_warnings_on_success(fake_bin, tmp_path, raw_fixture):
+    """読めなかったロックファイルの警告は stderr にしか出ない. 成功時も捨てない (#615)."""
+    payload = json.dumps(osv_payload(raw_fixture, tmp_path))
+    (tmp_path / "payload.json").write_text(payload, encoding="utf-8")
+    fake_command(
+        fake_bin,
+        "osv-scanner",
+        VERSION_GUARD
+        + "echo 'Scanning dir .' >&2\n"
+        + "echo 'Failed to parse lockfile weird.lock: unsupported format' >&2\n"
+        + f"cat '{tmp_path}/payload.json'\nexit 1\n",
+    )
+    result = await OsvScanner(OsvConfig()).scan(Target(root=tmp_path), ctx(tmp_path))
+    assert result.status is ScanStatus.OK
+    assert result.stderr_excerpt is not None
+    assert "weird.lock" in result.stderr_excerpt
+    promoted = [w for w in result.parse_warnings if w.startswith("osv-scanner:")]
+    assert promoted == ["osv-scanner: Failed to parse lockfile weird.lock: unsupported format"]
+
+
+@pytest.mark.parametrize("severity", ["UNKNOWN", None])
+def test_trivy_vulnerability_with_unknown_severity_says_so(severity):
+    """誤設定・osv と同じく、medium に丸めたことを message に出す (#618)."""
+    item: dict[str, Any] = {"VulnerabilityID": "CVE-2099-0001", "PkgName": "pkg"}
+    if severity is not None:
+        item["Severity"] = severity
+    payload = {"Results": [{"Target": "go.sum", "Type": "gomod", "Vulnerabilities": [item]}]}
+    candidates, _ = parse_trivy(payload, Path("/repo"))
+    assert candidates[0].severity_reported is Severity.MEDIUM
+    assert "重大度不明" in candidates[0].message

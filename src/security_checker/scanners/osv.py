@@ -262,6 +262,29 @@ class OsvScanner(BaseScanner):
             exit_code=result.exit_code,
             version=status.version,
             raw_path=raw_path,
-            parse_warnings=warnings,
-            stderr=None,
+            parse_warnings=[*warnings, *_stderr_warnings(result.stderr)],
+            # 成功時も残す. 読めなかったロックファイルの警告は stderr にしか出ない
+            stderr=result.stderr,
         )
+
+
+#: 検査されなかった依存があることを示す stderr の行. 進捗表示 (Scanning ...) は拾わない
+_STDERR_WARNING_RE = re.compile(
+    r"\b(?:fail(?:ed|ure)?|error|unable|could ?n[o']t|cannot|unsupported|skipp(?:ed|ing))\b",
+    re.IGNORECASE,
+)
+MAX_STDERR_WARNINGS = 10
+
+
+def _stderr_warnings(stderr: bytes) -> list[str]:
+    """stderr のうち、検査の取りこぼしを示す行を parse_warnings に昇格する."""
+    lines = [
+        line.strip()
+        for line in stderr.decode("utf-8", "replace").splitlines()
+        if _STDERR_WARNING_RE.search(line)
+    ]
+    shown = [f"osv-scanner: {line[:300]}" for line in lines[:MAX_STDERR_WARNINGS]]
+    if len(lines) > MAX_STDERR_WARNINGS:
+        rest = len(lines) - MAX_STDERR_WARNINGS
+        shown.append(f"osv-scanner: ほか {rest} 行の警告 (stderr を参照)")
+    return shown

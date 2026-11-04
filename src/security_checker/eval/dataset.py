@@ -19,7 +19,6 @@ from security_checker.errors import ConfigError
 from security_checker.models.candidate import Candidate, Location
 from security_checker.models.enums import Category, Severity
 
-
 #: ケースの id はワークスペースのディレクトリ名になる。区切り文字や `..` を通さない
 _CASE_ID = re.compile(r"^[A-Za-z0-9._-]+$")
 

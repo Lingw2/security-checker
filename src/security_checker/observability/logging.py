@@ -59,11 +59,23 @@ class _Formatter(logging.Formatter):
         if self.fmt == "json":
             text = json.dumps(payload, ensure_ascii=False, default=str)
         else:
-            extras = " ".join(f"{key}={value}" for key, value in fields.items())
+            extras = " ".join(f"{key}={_text_value(value)}" for key, value in fields.items())
             text = f"{payload['ts']} {payload['level']:<5} {payload['event']}" + (
                 f" {extras}" if extras else ""
             )
         return redact_known_patterns(text)
+
+
+def _text_value(value: Any) -> str:
+    """text 形式の値. 空白・`=`・引用符・制御文字を含むなら JSON の文字列として引用する.
+
+    そのままだと `reason=rate limit hit` が `reason=rate` と `limit` と `hit` に見え、
+    key=value の区切りが曖昧になる (改行はログ行の偽装にもなる)。
+    """
+    text = value if isinstance(value, str) else str(value)
+    if text == "" or any(c.isspace() or c in '="\\' or not c.isprintable() for c in text):
+        return json.dumps(text, ensure_ascii=False)
+    return text
 
 
 def configure(

@@ -18,6 +18,7 @@ import pytest
 from security_checker.providers.process.sandbox import (
     OUTPUT_LIMIT,
     PROMPT_FILE_PLACEHOLDER,
+    TERM_GRACE_S,
     TRUNCATED_NOTICE,
     _read_capped,
     created_paths,
@@ -234,4 +235,6 @@ async def test_timeout_does_not_wait_extra_when_the_parent_exited_first():
     )
     result = await run_sandboxed([sys.executable, "-c", script], prompt="x", timeout_s=1.0)
     assert result.timed_out
-    assert result.duration_ms < 3000
+    # 猶予を使い切ると timeout + TERM_GRACE_S 以上かかる. それ未満なら待っていない.
+    # (3000 ms 固定の上限は、負荷の高い CI でインタプリタの起動が遅いと誤って落ちた)
+    assert result.duration_ms < (1.0 + TERM_GRACE_S) * 1000

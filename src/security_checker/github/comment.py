@@ -216,7 +216,7 @@ def _scanner_warnings(report: Report) -> list[str]:
             lines.append(f"⚠️ {name} が失敗したため、この観点の検査は行われていません。")
         elif run.status is ScanStatus.SKIPPED:
             reason = f" ({_one_line(run.reason, 120)})" if run.reason else ""
-            lines.append(f"ℹ️ {name} はスキップされました{reason}。この観点は検査していません。")
+            lines.append(f"⏭️ {name} はスキップされました{reason}。この観点は検査していません。")
     return lines
 
 
@@ -239,9 +239,8 @@ def _summary_block(finding: Finding) -> list[str]:
                 if verdict.vulnerable
                 else f"脆弱でない ({verdict.confidence:.2f})"
             )
-            lines.append(
-                f"- {md.code_span(verdict.reviewer)}: {judgement} — 「{_one_line(verdict.reasoning, 160)}」"
-            )
+            reason = _one_line(verdict.reasoning, 160)
+            lines.append(f"- {md.code_span(verdict.reviewer)}: {judgement} — 「{reason}」")
         return [*lines, ""]
 
     mark = SEVERITY_MARK[finding.severity]

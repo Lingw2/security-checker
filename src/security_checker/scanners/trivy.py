@@ -144,6 +144,11 @@ def parse_trivy(
             )
             title = str(item.get("Title") or vuln_id)
             fixed = item.get("FixedVersion")
+            severity = SEVERITY_MAP.get(str(item.get("Severity")).upper())
+            message = f"{name} {ref.version or ''} に既知の脆弱性があります: {title}"
+            if severity is None:
+                # 誤設定・osv と同じく、medium に丸めたことを隠さない
+                message += " (重大度不明のため medium として扱います)"
             candidates.append(
                 Candidate(
                     id=ids.make("trivy", vuln_id, path, ref.as_key()),
@@ -151,10 +156,9 @@ def parse_trivy(
                     category=Category.DEPENDENCY,
                     rule_id=vuln_id,
                     title=title,
-                    message=f"{name} {ref.version or ''} に既知の脆弱性があります: {title}",
+                    message=message,
                     package=ref,
-                    severity_reported=SEVERITY_MAP.get(str(item.get("Severity")).upper())
-                    or Severity.MEDIUM,
+                    severity_reported=severity or Severity.MEDIUM,
                     cwe=[c for c in item.get("CweIDs") or [] if isinstance(c, str)],
                     cve=[vuln_id] if _CVE_RE.match(vuln_id) else [],
                     references=_references(item),
