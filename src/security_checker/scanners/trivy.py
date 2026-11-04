@@ -168,6 +168,10 @@ def parse_trivy(
     return candidates, warnings
 
 
+#: trivy に渡す --timeout を timeout_s よりどれだけ長くするか
+TRIVY_TIMEOUT_MARGIN_S = 60
+
+
 class TrivyScanner(BaseScanner):
     """`trivy fs --scanners <...> --format json .` を実行する."""
 
@@ -208,6 +212,13 @@ class TrivyScanner(BaseScanner):
             "--output",
             str(raw_path),
             *(ctx.untrusted.trivy_args() if ctx.untrusted else []),
+            # trivy 自身の既定 (5 分) が timeout_s より先に効くと、タイムアウトが
+            # 「実行に失敗」に化ける。外側の上限が先に効くよう、少し長く渡す
+            *(
+                []
+                if any(arg.startswith("--timeout") for arg in self.settings.extra_args)
+                else ["--timeout", f"{self.settings.timeout_s + TRIVY_TIMEOUT_MARGIN_S}s"]
+            ),
             *self.settings.extra_args,
             ".",
         ]

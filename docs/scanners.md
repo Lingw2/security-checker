@@ -38,7 +38,10 @@ v2 は `skipped` と `failed` を型で分け、どちらもレポートの冒�
 - `scanners.semgrep.config` は `p/default` のようなルールセットか、ルールファイルのパス。
   複数ならリストで書きます。既定は `[p/default, bundled:llm, bundled:ci-lock]`。
 - `bundled:<名前>` は security-checker が同梱するルールです。解決先は常にパッケージ内で、
-  検査対象のツリーからは読みません。
+  検査対象のツリーからは読みません。同梱ルールの `rule_id` は `bundled.<ルールの id>` です
+  (semgrep がインストール先のパスから付ける接頭辞は外すので、環境が変わっても ID と ignore の指定は変わりません)。
+- semgrep の重大度は `CRITICAL` / `HIGH` / `MEDIUM` / `LOW` と、古い表記の `ERROR` (= high) /
+  `WARNING` (= medium) / `INFO` (= low) を読みます。
 
   | 名前 | 内容 |
   |---|---|

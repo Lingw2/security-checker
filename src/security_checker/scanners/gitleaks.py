@@ -237,8 +237,16 @@ class GitleaksScanner(BaseScanner):
                     version=status.version,
                 )
 
+        # 除外したファイルの検出は raw にも残さない (report.json と件数をそろえる)
         redacted_payload = [
-            redact_raw_entry(entry, target.root) for entry in payload if isinstance(entry, dict)
+            redact_raw_entry(entry, target.root)
+            for entry in payload
+            if isinstance(entry, dict)
+            and not (
+                ctx.exclude
+                and isinstance(entry.get("File"), str)
+                and is_excluded(relative_path(entry["File"], target.root), ctx.exclude)
+            )
         ]
         raw_path.write_text(
             json.dumps(redacted_payload, ensure_ascii=False, indent=2), encoding="utf-8"

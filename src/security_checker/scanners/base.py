@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict
 from security_checker.config.schema import ScannerConfig
 from security_checker.models.candidate import Candidate
 from security_checker.models.enums import Category, ScanStatus
+from security_checker.providers.process.sandbox import POSIX, terminate
 from security_checker.scanners.untrusted import UntrustedOverrides
 
 STDERR_EXCERPT_LIMIT = 2000
@@ -114,7 +115,8 @@ async def run_command(
     """外部コマンドを shell を介さずに実行する.
 
     shell=False は設計上の制約 (§9.7): 引数がシェルに解釈される経路を作らない。
-    タイムアウト時は子プロセスを確実に殺してから戻る。
+    タイムアウト時と中断 (Ctrl-C) 時は、孫プロセス (semgrep-core など) まで
+    プロセスグループごと止めてから戻る。
     """
     stdout_file = stdout_path.open("wb") if stdout_path is not None else None
     try:
@@ -123,13 +125,18 @@ async def run_command(
             cwd=str(cwd),
             stdout=stdout_file or asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            # 新しいプロセスグループにして、killpg で孫まで届くようにする
+            start_new_session=POSIX,
         )
         try:
             stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout_s)
         except TimeoutError:
-            process.kill()
-            await process.wait()
+            await terminate(process)
             return CommandResult(exit_code=None, stdout=b"", stderr=b"", timed_out=True)
+        except asyncio.CancelledError:
+            # 中断されても、起動したスキャナを残さない
+            await asyncio.shield(terminate(process))
+            raise
         return CommandResult(
             exit_code=process.returncode,
             stdout=stdout or b"",

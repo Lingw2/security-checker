@@ -29,10 +29,20 @@ from security_checker.scanners.filters import is_excluded
 CWE_RE = re.compile(r"CWE-\d+")
 
 SEVERITY_MAP = {
+    # semgrep 1.72.0 からの正式な値
+    "CRITICAL": Severity.CRITICAL,
+    "HIGH": Severity.HIGH,
+    "MEDIUM": Severity.MEDIUM,
+    "LOW": Severity.LOW,
+    # 古い値 (公式の対応: ERROR = HIGH / WARNING = MEDIUM / INFO = LOW)
     "ERROR": Severity.HIGH,
     "WARNING": Severity.MEDIUM,
     "INFO": Severity.LOW,
 }
+#: semgrep CE (未ログイン) が extra.lines に入れる固定の文字列. スニペットとしては使えない
+_LOGIN_PLACEHOLDER = "requires login"
+#: 同梱ルールの check_id に semgrep が前置する、インストール先から作った接頭辞の終わり
+_BUNDLED_RULE_PREFIX = "security_checker.rules.semgrep."
 CONFIDENCE_MAP = {"HIGH": 0.9, "MEDIUM": 0.6, "LOW": 0.3}
 
 
@@ -44,6 +54,33 @@ def _extract_cwe(metadata: dict[str, Any]) -> list[str]:
         if isinstance(value, str):
             found.extend(CWE_RE.findall(value))
     return list(dict.fromkeys(found))
+
+
+#: 秘密の値そのものを指す CWE (ハードコードされた資格情報・鍵)
+_SECRET_CWES = frozenset({"CWE-798", "CWE-259", "CWE-321", "CWE-522"})
+
+
+def is_secret_result(item: dict[str, Any]) -> bool:
+    """検出箇所が秘密の値そのものか. その行は raw にもレポートにも平文で残さない (§19.2)."""
+    check_id = item.get("check_id")
+    if isinstance(check_id, str) and "secret" in check_id.lower():
+        return True
+    metadata = as_dict(as_dict(item.get("extra")).get("metadata"))
+    return bool(_SECRET_CWES & set(_extract_cwe(metadata)))
+
+
+def redact_semgrep_payload(payload: Any) -> Any:
+    """raw/semgrep.json に書く形. 秘密系ルールの検出では一致した行を落とす."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
+        return payload
+    results: list[Any] = []
+    for item in payload["results"]:
+        if isinstance(item, dict) and is_secret_result(item):
+            extra = dict(as_dict(item.get("extra")))
+            extra.pop("lines", None)
+            item = {**item, "extra": extra}
+        results.append(item)
+    return {**payload, "results": results}
 
 
 def _extract_references(metadata: dict[str, Any]) -> list[str]:
@@ -103,8 +140,17 @@ def parse_semgrep(
         if not isinstance(end_line, int):
             end_line = start_line
 
+        check_id = _normalize_check_id(check_id)
         snippet_raw = extra.get("lines")
         snippet = snippet_raw.strip() if isinstance(snippet_raw, str) else None
+        if snippet in (None, "", _LOGIN_PLACEHOLDER):
+            # CE では lines が固定文字列になり、ID が出現順だけで決まってしまう (§6.1)
+            snippet = _read_lines(root, path, start_line, end_line)
+        secret = is_secret_result(item)
+        # ID の材料には一致した行を使うが (ハッシュにしか残らない)、秘密の行は保存しない
+        fingerprint = snippet or check_id
+        if secret:
+            snippet = None
         message = extra.get("message")
         message_text = message.strip() if isinstance(message, str) else check_id
         severity_raw = extra.get("severity")
@@ -120,7 +166,7 @@ def parse_semgrep(
 
         candidates.append(
             Candidate(
-                id=ids.make("semgrep", check_id, path, snippet or check_id),
+                id=ids.make("semgrep", check_id, path, fingerprint),
                 scanner="semgrep",
                 category=Category.SAST,
                 rule_id=check_id,
@@ -136,8 +182,10 @@ def parse_semgrep(
                 confidence_reported=confidence,
                 cwe=_extract_cwe(metadata),
                 references=_extract_references(metadata),
-                fix_available=fix if isinstance(fix, str) else None,
-                raw=item,
+                # 秘密系ルールの autofix は値を含みうる. 一致した行と一緒に落とす
+                fix_available=fix if isinstance(fix, str) and not secret else None,
+                raw=redact_semgrep_payload({"results": [item]})["results"][0] if secret else item,
+                redacted=secret,
             )
         )
 
@@ -149,6 +197,29 @@ def parse_semgrep(
                 warnings.append(f"semgrep: {detail}")
 
     return candidates, warnings
+
+
+def _normalize_check_id(check_id: str) -> str:
+    """同梱ルールの ID から、インストール先のパスに由来する接頭辞を外す.
+
+    semgrep はローカルのルールファイルの check_id に、そのファイルの場所をドット区切りにした
+    接頭辞を付ける。そのままでは rule_id・候補 ID・ignore の指定が環境ごとに変わる。
+    """
+    _, found, rest = check_id.rpartition(_BUNDLED_RULE_PREFIX)
+    return f"bundled.{rest}" if found and rest else check_id
+
+
+def _read_lines(root: Path, path: str, start: int, end: int) -> str | None:
+    """検出箇所の行を検査対象から読む. 読めなければ None (ID は出現順だけで区別する)."""
+    if start < 1:
+        return None
+    try:
+        lines = (root / path).read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    selected = lines[start - 1 : max(end, start)]
+    text = "\n".join(selected).strip()
+    return text or None
 
 
 def resolve_config(value: str) -> str:
@@ -235,6 +306,10 @@ class SemgrepScanner(BaseScanner):
                 raw_path=raw_path,
             )
 
+        # 秘密系ルールで一致した行を、成果物 (CI の artifact) に平文で残さない
+        redacted = redact_semgrep_payload(payload)
+        if redacted is not payload:
+            raw_path.write_text(json.dumps(redacted, ensure_ascii=False), encoding="utf-8")
         try:
             candidates, warnings = parse_semgrep(payload, target.root, exclude=ctx.exclude)
         except UnparseableOutputError as exc:

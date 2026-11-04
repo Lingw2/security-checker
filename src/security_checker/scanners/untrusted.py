@@ -98,7 +98,41 @@ def residual_warnings(root: Path) -> list[str]:
             " semgrep が必ず読みます。"
             f"除外されたファイルは検査されません: {listed}{more}"
         )
+    annotated = _find_trivy_annotations(root)
+    if annotated:
+        listed = ", ".join(annotated[:_LIST_LIMIT])
+        more = f" ほか {len(annotated) - _LIST_LIMIT} 件" if len(annotated) > _LIST_LIMIT else ""
+        # trivy にはコード内注釈を無効にするフラグが無い (0.75.0 時点)
+        warnings.append(
+            "検査対象を信用しない設定ですが、trivy はファイル内の trivy:ignore 注釈を必ず読みます。"
+            f"注釈で抑制された誤設定は報告されません: {listed}{more}"
+        )
     return warnings
+
+
+#: trivy が誤設定を検査するファイル. 注釈はこの中にしか効かない
+_TRIVY_CONFIG_SUFFIXES = (".tf", ".tfvars", ".hcl", ".yaml", ".yml", ".json", ".dockerfile")
+_TRIVY_ANNOTATION = b"trivy:ignore"
+_MAX_ANNOTATION_SCAN_BYTES = 1_000_000
+
+
+def _find_trivy_annotations(root: Path) -> list[str]:
+    found: list[str] = []
+    for current, dirs, files in os.walk(root):
+        dirs[:] = sorted(d for d in dirs if d not in _SKIP_DIRS)
+        for name in sorted(files):
+            lowered = name.lower()
+            if not (lowered.endswith(_TRIVY_CONFIG_SUFFIXES) or lowered.startswith("dockerfile")):
+                continue
+            path = Path(current) / name
+            try:
+                if path.stat().st_size > _MAX_ANNOTATION_SCAN_BYTES:
+                    continue
+                if _TRIVY_ANNOTATION in path.read_bytes():
+                    found.append(path.relative_to(root).as_posix())
+            except OSError:
+                continue
+    return found
 
 
 def _find(root: Path, name: str) -> list[str]:

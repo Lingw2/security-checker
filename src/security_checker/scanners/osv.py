@@ -74,20 +74,38 @@ def _group_severity(group: dict[str, Any], vulns: list[dict[str, Any]]) -> Sever
     return max(known, key=lambda s: s.order) if known else None
 
 
-def _fixed_version(vulns: list[dict[str, Any]], name: str) -> str | None:
-    fixed: list[str] = []
+def _fixed_version(
+    vulns: list[dict[str, Any]], name: str, installed: str | None = None
+) -> str | None:
+    """インストール済みの版に対応する修正版. 決められなければ None (推測した版を示さない).
+
+    advisory は保守中のブランチごとに範囲を持つので、最初の `fixed` は別のブランチの版でありうる。
+    版の大小は生態系ごとに規則が違うので比較せず、`affected[].versions` に入っている範囲を選ぶ。
+    GIT の範囲の `fixed` はコミットのハッシュなので使わない。
+    """
+    matched: list[str] = []
+    every: list[str] = []
     for vuln in vulns:
         for affected in vuln.get("affected") or []:
-            package = as_dict(as_dict(affected).get("package"))
+            affected = as_dict(affected)
+            package = as_dict(affected.get("package"))
             if package.get("name") != name:
                 continue
-            for range_ in as_dict(affected).get("ranges") or []:
-                for event in as_dict(range_).get("events") or []:
-                    value = as_dict(event).get("fixed")
-                    if isinstance(value, str):
-                        fixed.append(value)
-    # 版の大小は生態系ごとに規則が違うので比較しない。最初に見つかったものを示す
-    return fixed[0] if fixed else None
+            fixed = [
+                value
+                for range_ in affected.get("ranges") or []
+                if str(as_dict(range_).get("type", "")).upper() != "GIT"
+                for event in as_dict(range_).get("events") or []
+                if isinstance(value := as_dict(event).get("fixed"), str)
+            ]
+            every.extend(fixed)
+            versions = affected.get("versions") or []
+            if installed is not None and installed in versions:
+                matched.extend(fixed)
+    if matched:
+        return matched[0]
+    distinct = list(dict.fromkeys(every))
+    return distinct[0] if len(distinct) == 1 else None
 
 
 def parse_osv(
@@ -103,7 +121,15 @@ def parse_osv(
             warnings.append("osv-scanner の出力に results がありません")
         return [], warnings
 
-    for result in results:
+    # 同じマニフェストを「書かれた依存」(lockfile) と「解決後の依存」(unknown) の
+    # 2 回出すことがある。
+    # 書かれた側を先に読み、同じパッケージ・同じ脆弱性は 1 件にする (版の表記の違いは無視する)
+    ordered = sorted(
+        (as_dict(r) for r in results),
+        key=lambda r: as_dict(r.get("source")).get("type") != "lockfile",
+    )
+    seen: set[tuple[str, str, str, str]] = set()
+    for result in ordered:
         source = as_dict(as_dict(result).get("source"))
         raw_path = source.get("path")
         if not isinstance(raw_path, str):
@@ -133,6 +159,10 @@ def parse_osv(
                 vulns = [vulns_by_id[i] for i in group_ids if i in vulns_by_id]
                 aliases = [a for a in as_dict(group).get("aliases") or [] if isinstance(a, str)]
                 primary = sorted(group_ids)[0]
+                key = (manifest, ecosystem, name.lower(), primary)
+                if key in seen:
+                    continue
+                seen.add(key)
                 summary = next(
                     (str(v["summary"]) for v in vulns if isinstance(v.get("summary"), str)), ""
                 )
@@ -162,7 +192,7 @@ def parse_osv(
                         severity_reported=severity or Severity.MEDIUM,
                         cve=sorted({a for a in [*aliases, *group_ids] if _CVE_RE.match(a)}),
                         references=list(dict.fromkeys(references))[:MAX_REFERENCES],
-                        fix_available=_fixed_version(vulns, name),
+                        fix_available=_fixed_version(vulns, name, version),
                         raw={"ids": group_ids, "aliases": aliases},
                     )
                 )
