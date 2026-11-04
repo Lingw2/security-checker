@@ -27,7 +27,9 @@ from security_checker.eval.metrics import CaseOutcome, Metrics, evaluate_outcome
 from security_checker.models.candidate import Candidate
 from security_checker.models.finding import Finding
 from security_checker.models.task import ReviewTask
+from security_checker.models.verdict import VerdictStatus
 from security_checker.observability.cost import PriceTable
+from security_checker.report import sanitize as md
 from security_checker.run import (
     ReviewerSetup,
     build_reviewers,
@@ -151,7 +153,16 @@ def _to_outcome(case: EvalCase, finding: Finding) -> CaseOutcome:
         expected_cwe=list(case.ground_truth.cwe),
         status=finding.status,
         severity=finding.severity,
-        cwe=list(finding.cwe),
+        # スキャナの CWE は数えない. 同梱ケースは候補に正解の CWE が付いており、
+        # 足すと LLM が何を答えても一致率が 100% になる (#319)
+        cwe=list(
+            dict.fromkeys(
+                cwe
+                for verdict in finding.verdicts
+                if verdict.status is VerdictStatus.OK and verdict.vulnerable
+                for cwe in verdict.cwe
+            )
+        ),
         confidence=finding.confidence,
         latency_ms=latency,
         usd=usd,
@@ -164,9 +175,9 @@ def to_markdown(result: EvalResult) -> str:
     """人間が読む比較表 (§27.3). 数字を隠さない."""
     metrics = result.metrics
     lines = [
-        f"# 評価結果: {result.dataset}",
+        f"# 評価結果: {md.text(result.dataset)}",
         "",
-        f"- Reviewer: {', '.join(result.reviewers) or '(なし)'}",
+        f"- Reviewer: {', '.join(md.code_span(r) for r in result.reviewers) or '(なし)'}",
         f"- 集約戦略: {result.aggregation}",
         f"- ケース数: {metrics.cases} "
         f"(採点外: エラー {metrics.errors} / 未レビュー {metrics.not_reviewed})",
@@ -208,12 +219,14 @@ def to_markdown(result: EvalResult) -> str:
         by_id = {outcome.case_id: outcome for outcome in result.outcomes}
         for case_id in metrics.missed_case_ids:
             outcome = by_id[case_id]
-            lines.append(f"- `{case_id}` — {outcome.summary or '(要約なし)'}")
+            # summary は LLM の出力. report.md・PR コメントと同じ規則で無害化する (#328)
+            summary = " ".join(md.text(outcome.summary).split()) or "(要約なし)"
+            lines.append(f"- {md.code_span(case_id)} — {summary}")
         lines.append("")
 
     if result.warnings:
         lines += ["## 警告", ""]
-        lines += [f"- {message}" for message in result.warnings]
+        lines += [f"- {' '.join(md.text(message).split())}" for message in result.warnings]
         lines.append("")
 
     return "\n".join(lines)
@@ -230,7 +243,7 @@ def _num(value: float | None) -> str:
 def _usd(metrics: Metrics) -> str:
     if not metrics.cost_known:
         # 測れないものを測ったふりをしない (§24.3)
-        return "unknown (計測できない transport を含む)"
+        return "unknown (価格の分からないモデルか、計測できない transport を含む)"
     if metrics.total_usd is None:
         return "—"
     return f"${metrics.total_usd:.4f}"

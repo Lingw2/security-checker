@@ -1141,7 +1141,11 @@ def eval_command(
 
     try:
         dataset = load_dataset(dataset_dir)
-        result = asyncio.run(run_eval(dataset, loaded.config))
+        # 価格表は review と同じ場所から読む. 読まないとコストが常に unknown になる (#318)
+        price_table = load_price_table(
+            loaded.config_path.parent if loaded.config_path is not None else None
+        )
+        result = asyncio.run(run_eval(dataset, loaded.config, price_table=price_table))
     except SecurityCheckerError as exc:
         _fail(str(exc), exc.exit_code)
 

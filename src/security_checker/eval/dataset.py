@@ -31,8 +31,15 @@ class GroundTruth(BaseModel):
     vulnerable: bool
     cwe: list[str] = Field(default_factory=list)
     severity: Severity = Severity.NONE
-    #: なぜその正解なのか. 評価レポートに載せて、ラベルの妥当性を後から検証できるようにする
-    rationale: str = ""
+    #: なぜその正解なのか. **必須**. ラベルの妥当性を後から検証できないと評価自体が信用できない
+    rationale: str
+
+    @field_validator("rationale")
+    @classmethod
+    def _rationale_is_written(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("rationale (なぜその正解なのか) は空にできません")
+        return value
 
 
 class CaseCandidate(BaseModel):

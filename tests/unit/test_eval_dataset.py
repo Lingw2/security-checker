@@ -26,6 +26,7 @@ code: |
 ground_truth:
   vulnerable: true
   severity: high
+  rationale: テスト用
 """
 
 
@@ -124,3 +125,14 @@ def test_a_case_id_that_is_not_a_plain_name_is_rejected(tmp_path, case_id):
 def test_a_nested_relative_path_is_still_accepted(tmp_path):
     write_case(tmp_path, "0001.yaml", CASE.replace("path: app.py", "path: src/pkg/app.py"))
     assert load_dataset(tmp_path).cases[0].candidate.path == "src/pkg/app.py"
+
+
+@pytest.mark.parametrize("rationale", [None, '""', '"   "'])
+def test_rationale_is_required(tmp_path, rationale):
+    """rationale は必須. 省略・空・空白だけを黙って読み込まない (#235)."""
+    body = CASE.replace("  rationale: テスト用\n", "")
+    if rationale is not None:
+        body += f"  rationale: {rationale}\n"
+    write_case(tmp_path, "0001.yaml", body)
+    with pytest.raises(ConfigError, match="rationale"):
+        load_dataset(tmp_path)

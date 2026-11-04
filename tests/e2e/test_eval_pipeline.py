@@ -121,6 +121,43 @@ async def test_a_perfect_run_scores_full_recall(tmp_path):
     assert {outcome.case_id for outcome in result.outcomes} == {"0001", "0002"}
 
 
+async def test_cwe_match_rate_only_counts_what_the_reviewer_answered(tmp_path):
+    """スキャナの CWE (正解と同じ) を数えると、LLM が何を答えても 100% になる (#319)."""
+    dataset = load_dataset(make_dataset(tmp_path))
+    setup = setup_with(
+        [
+            verdict_payload(vulnerable=True, severity="high", cwe=["CWE-22"], confidence=0.95),
+            verdict_payload(vulnerable=False, severity="none", confidence=0.9),
+        ]
+    )
+    result = await run_eval(dataset, make_config(), reviewer_setup=setup)
+    assert result.metrics.cwe_match_rate == 0.0
+
+
+def test_markdown_neutralizes_llm_summaries():
+    """比較表も report.md と同じ規則で無害化する (#328)."""
+    from security_checker.eval.metrics import CaseOutcome, evaluate_outcomes
+    from security_checker.eval.runner import EvalResult
+    from security_checker.models.enums import Severity
+
+    outcome = CaseOutcome(
+        case_id="0001",
+        expected_vulnerable=True,
+        expected_severity=Severity.HIGH,
+        status=FindingStatus.FALSE_POSITIVE,
+        severity=Severity.NONE,
+        summary="<img src=x> @octocat [押して](https://attacker.example)",
+    )
+    result = EvalResult(
+        dataset="ds", cases=1, metrics=evaluate_outcomes([outcome]), outcomes=[outcome]
+    )
+    document = to_markdown(result)
+    assert "0001" in document
+    assert "<img" not in document
+    assert "](https://" not in document
+    assert "@octocat" not in document
+
+
 async def test_a_missed_true_positive_is_named(tmp_path):
     """見逃しは数字だけでなく、どのケースかが分かる (§27.2)."""
     dataset = load_dataset(make_dataset(tmp_path))
