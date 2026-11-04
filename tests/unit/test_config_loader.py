@@ -315,7 +315,10 @@ def test_custom_exclude_still_skips_git_and_the_output_directory(tmp_path):
 
 def test_a_preset_name_cannot_escape_the_presets_directory(tmp_path):
     (tmp_path / "evil.yml").write_text("version: 1\n", encoding="utf-8")
-    relative = os.path.relpath(tmp_path / "evil", PRESET_DIR)
+    try:
+        relative = os.path.relpath(tmp_path / "evil", PRESET_DIR)
+    except ValueError:  # Windows で一時ディレクトリが別のドライブにある
+        pytest.skip("presets と一時ディレクトリが別のドライブにある")
     assert (PRESET_DIR / f"{relative}.yml").is_file()  # 照合しなければ読めてしまう経路
     with pytest.raises(ConfigError, match="存在しません"):
         load_config(tmp_path, preset=str(relative), environ={})
