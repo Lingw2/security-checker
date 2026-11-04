@@ -242,3 +242,57 @@ def test_outside_diff_candidates_stay_in_sarif_as_notes():
     assert by_id["out"]["level"] == "note"
     assert "security-severity" not in by_id["out"]["properties"]
     assert by_id["out"]["properties"]["status"] == "outside_diff"
+
+
+# --- 未追跡ファイル・バイナリ・引用されたパス (#668, #669, #670) ------------------
+
+
+def test_untracked_new_files_are_inside_the_diff(repo):
+    (repo / "fresh.py").write_text("p = 1\nq = 2\n", encoding="utf-8")
+    (repo / "ignored.log").write_text("x\n", encoding="utf-8")
+    (repo / ".gitignore").write_text("*.log\n", encoding="utf-8")
+    scope = compute_diff(repo, "main")
+    assert scope.added["fresh.py"] == ((1, 2),)
+    assert "fresh.py" in scope.changed_files
+    assert "ignored.log" not in scope.changed_files
+
+
+def test_untracked_binary_files_count_as_changed_without_lines(repo):
+    (repo / "lib.jar").write_bytes(b"PK\x03\x04\x00\x00binary")
+    scope = compute_diff(repo, "main")
+    assert "lib.jar" in scope.changed_files
+    assert "lib.jar" not in scope.added
+
+
+def test_binary_changes_are_counted_as_changed_files(repo):
+    (repo / "lib.jar").write_bytes(b"PK\x03\x04\x00\x00v1")
+    git(repo, "add", "lib.jar")
+    scope = compute_diff(repo, "main")
+    assert "lib.jar" in scope.changed_files
+
+
+def test_parse_binary_diff_without_file_headers():
+    diff = (
+        "diff --git a/vendor/x.jar b/vendor/x.jar\n"
+        "index 1111111..2222222 100644\n"
+        "Binary files a/vendor/x.jar and b/vendor/x.jar differ\n"
+    )
+    added, changed = parse_unified_diff(diff)
+    assert added == {}
+    assert changed == {"vendor/x.jar"}
+
+
+def test_c_quoted_paths_are_unescaped():
+    diff = (
+        'diff --git "a/we\\"ird\\tname.py" "b/we\\"ird\\tname.py"\n'
+        '--- "a/we\\"ird\\tname.py"\n'
+        '+++ "b/we\\"ird\\tname.py"\n'
+        "@@ -0,0 +1,2 @@\n"
+        "+a\n"
+        "+b\n"
+        'diff --git "a/\\346\\227\\245.py" "b/\\346\\227\\245.py"\n'
+        "Binary files a/x and b/x differ\n"
+    )
+    added, changed = parse_unified_diff(diff)
+    assert added == {'we"ird\tname.py': ((1, 2),)}
+    assert changed == {'we"ird\tname.py', "日.py"}

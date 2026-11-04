@@ -25,6 +25,9 @@ from security_checker.models.candidate import Candidate
 from security_checker.models.enums import Category
 
 _HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+_BINARY_RE = re.compile(r"^Binary files .* differ$")
+#: `git` の C 形式のエスケープ (core.quotePath). 8 進はバイト列として UTF-8 で戻す
+_C_ESCAPES = {"a": "\a", "b": "\b", "t": "\t", "n": "\n", "v": "\v", "f": "\f", "r": "\r"}
 GIT_TIMEOUT_S = 60
 
 
@@ -86,10 +89,18 @@ def parse_unified_diff(text: str) -> tuple[dict[str, tuple[tuple[int, int], ...]
     old_path: str | None = None
     # `diff --git` 行の無い素の unified diff も受け付けるよう、先頭はヘッダとして扱う
     in_header = True
+    # `diff --git` 行から取ったパス. `---`/`+++` の無いバイナリの差分で使う
+    header_path: str | None = None
     for line in text.splitlines():
         if line.startswith("diff --git "):
             in_header = True
             current = old_path = None
+            header_path = _header_path(line[len("diff --git ") :])
+            continue
+        if in_header and _BINARY_RE.match(line):
+            # バイナリ (jar・wheel など) は行を持たないが、変更されたことは数える
+            if header_path is not None:
+                changed.add(header_path)
             continue
         if in_header and line.startswith("--- "):
             old_path = _strip_prefix(line[4:])
@@ -114,13 +125,63 @@ def parse_unified_diff(text: str) -> tuple[dict[str, tuple[tuple[int, int], ...]
 
 
 def _strip_prefix(raw: str) -> str | None:
-    path = raw.split("\t", 1)[0]
+    if raw.startswith('"'):
+        # タブ・改行・引用符・バックスラッシュを含むパスは core.quotePath=false でも引用される
+        unquoted = _unquote_c(raw)
+        if unquoted is None:
+            return None
+        path = unquoted[0]
+    else:
+        path = raw.split("\t", 1)[0]
     if path == "/dev/null":
         return None
-    if path.startswith('"') and path.endswith('"'):
-        # 非 ASCII パスは core.quotePath=false で避けているが、念のため引用符を外す
-        path = path[1:-1]
     return path[2:] if path[:2] in ("a/", "b/") else path
+
+
+def _header_path(rest: str) -> str | None:
+    """`diff --git a/<path> b/<path>` の新しい側のパス."""
+    if rest.startswith('"'):
+        first = _unquote_c(rest)
+        if first is None:
+            return None
+        rest = rest[first[1] :].lstrip(" ")
+        return _strip_prefix(rest)
+    # 引用されていない場合、名前の変更が無ければ両側は同じなので半分に割れる
+    if rest.startswith("a/"):
+        half = (len(rest) - 1) // 2
+        old, new = rest[:half], rest[half + 1 :]
+        if new.startswith("b/") and old[2:] == new[2:]:
+            return new[2:]
+    marker = rest.rfind(" b/")
+    if marker == -1:
+        return None
+    return _strip_prefix(rest[marker + 1 :])
+
+
+def _unquote_c(raw: str) -> tuple[str, int] | None:
+    """`"..."` を C 形式のエスケープを戻して読む. (パス, 閉じ引用符の次の位置) を返す."""
+    out = bytearray()
+    index = 1
+    while index < len(raw):
+        char = raw[index]
+        if char == '"':
+            return out.decode("utf-8", errors="replace"), index + 1
+        if char != "\\":
+            out += char.encode("utf-8")
+            index += 1
+            continue
+        escape = raw[index + 1 : index + 2]
+        if escape in _C_ESCAPES:
+            out += _C_ESCAPES[escape].encode()
+            index += 2
+        elif escape[:1].isdigit():
+            digits = raw[index + 1 : index + 4]
+            out.append(int(digits, 8) & 0xFF)
+            index += 4
+        else:  # \" と \\ とそれ以外は文字そのもの
+            out += escape.encode("utf-8")
+            index += 2
+    return None
 
 
 def _git(root: Path, *args: str) -> str:
@@ -165,7 +226,26 @@ def compute_diff(root: Path, base: str) -> DiffScope:
         "--",
     )
     added, changed = parse_unified_diff(text)
+    # 作業ツリーと比べるので、まだ git add していない新規ファイルも「この変更で増えた行」に含める
+    for path in _git(root, "ls-files", "--others", "--exclude-standard", "-z").split("\0"):
+        if not path:
+            continue
+        changed.add(path)
+        lines = _count_lines(root / path)
+        if lines:
+            added[path] = ((1, lines),)
     return DiffScope(base=base, added=added, changed_files=frozenset(changed))
+
+
+def _count_lines(path: Path) -> int:
+    """テキストの行数. 読めないもの・バイナリは 0 (変更ファイルとしてだけ数える)."""
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return 0
+    if b"\0" in data[:8192]:
+        return 0
+    return data.count(b"\n") + (0 if not data or data.endswith(b"\n") else 1)
 
 
 Mode = Literal["auto", "full", "diff"]
