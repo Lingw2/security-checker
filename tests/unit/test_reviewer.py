@@ -223,3 +223,40 @@ def test_evidence_for_a_candidate_without_code_is_dropped():
     kept, warnings = drop_hallucinated_evidence(_judgement(("uv.lock", 1, 1)), make_task())
     assert kept.evidence == []
     assert warnings
+
+
+async def test_truncated_output_is_not_repaired_with_the_same_limit():
+    """上限で切れた出力に同じ上限で修復を送らない (#665)."""
+    from security_checker.providers.base import CompletionResponse
+
+    cut = CompletionResponse(text='{"vulnerable": tr', finish_reason="length")
+    provider = ScriptedProvider([cut, verdict_payload()])
+    outcome = await Reviewer("r1", provider, max_output_tokens=50).review(make_task())
+    assert outcome.verdict.status is VerdictStatus.SCHEMA_ERROR
+    assert "max_output_tokens (50)" in outcome.verdict.reasoning
+    assert len(provider.requests) == 1
+
+
+def test_max_output_tokens_is_clamped_to_the_model_limit():
+    """モデルの出力上限を Reviewer の希望で引き上げない (#610)."""
+    from security_checker.config.schema import Config
+    from security_checker.run import build_reviewers
+
+    config = Config.model_validate(
+        {
+            "reviewers": [
+                {
+                    "name": "r1",
+                    "transport": "http",
+                    "dialect": "openai_chat",
+                    "base_url": "http://127.0.0.1:9/v1",
+                    "model": "m",
+                    "max_output_tokens": 999_999,
+                    "capabilities": {"max_output_tokens": 1024},
+                }
+            ]
+        }
+    )
+    setup = build_reviewers(config, environ={})
+    assert setup.runtimes[0].reviewer.max_output_tokens == 1024
+    assert any("1024" in w for w in setup.warnings)

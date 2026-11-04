@@ -34,6 +34,9 @@ SUPPORTED_KEYWORDS = frozenset(
         "required",
         "maxItems",
         "minItems",
+        # 数値の範囲 (confidence の 0〜1 など) は responseSchema でも縛れる (#298)
+        "minimum",
+        "maximum",
     }
 )
 

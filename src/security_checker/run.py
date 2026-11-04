@@ -432,11 +432,20 @@ def build_reviewers(
     language = resolve_language(config.output.language, environ)
     for reviewer_config in config.reviewers:
         provider = build_provider(reviewer_config, environ=environ, warnings=setup.warnings)
+        output_limit = provider.capabilities.max_output_tokens
+        max_output_tokens = min(reviewer_config.max_output_tokens, output_limit)
+        if max_output_tokens < reviewer_config.max_output_tokens:
+            setup.warnings.append(
+                f"reviewer '{reviewer_config.name}': max_output_tokens "
+                f"({reviewer_config.max_output_tokens}) がモデルの出力上限 ({output_limit}) を"
+                f"超えるため {output_limit} で送ります。上限が違うなら "
+                "capabilities.max_output_tokens を指定してください"
+            )
         reviewer = Reviewer(
             reviewer_config.name,
             provider,
             weight=reviewer_config.weight,
-            max_output_tokens=reviewer_config.max_output_tokens,
+            max_output_tokens=max_output_tokens,
             timeout_s=float(reviewer_config.timeout_s),
             seed=reviewer_config.seed,
             # process transport はトークンを実測できないため、価格表があっても

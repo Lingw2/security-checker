@@ -119,10 +119,14 @@ class AnthropicMessagesDialect:
         raw_usage = payload.get("usage")
         usage = Usage()
         if isinstance(raw_usage, dict):
+            # input_tokens はキャッシュの読み出し・書き込みを含まない。ほかの方言 (prompt_tokens) と
+            # 同じく「送った入力の合計」にそろえ、予算とコストの見積りで数え漏らさない (#667)
+            cache_read = _as_int(raw_usage.get("cache_read_input_tokens"))
+            cache_write = _as_int(raw_usage.get("cache_creation_input_tokens"))
             usage = Usage(
-                input_tokens=_as_int(raw_usage.get("input_tokens")),
+                input_tokens=_as_int(raw_usage.get("input_tokens")) + cache_read + cache_write,
                 output_tokens=_as_int(raw_usage.get("output_tokens")),
-                cached_tokens=_as_int(raw_usage.get("cache_read_input_tokens")),
+                cached_tokens=cache_read,
             )
 
         model_reported = payload.get("model")

@@ -147,7 +147,8 @@ def test_unsupported_keywords_are_dropped() -> None:
     )
     assert set(converted) == {"type", "properties"}
     assert converted["properties"]["text"] == {"type": "STRING"}
-    assert converted["properties"]["score"] == {"type": "NUMBER"}
+    # minimum / maximum は responseSchema でも使えるので残す (#298)
+    assert converted["properties"]["score"] == {"type": "NUMBER", "minimum": 0, "maximum": 1}
 
 
 def test_nullable_union_is_folded() -> None:

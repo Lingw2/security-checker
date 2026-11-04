@@ -20,7 +20,7 @@ from pydantic import BaseModel, ConfigDict
 from security_checker.config.schema import ScannerConfig
 from security_checker.models.candidate import Candidate
 from security_checker.models.enums import Category, ScanStatus
-from security_checker.providers.process.sandbox import POSIX, terminate
+from security_checker.processes import POSIX, terminate
 from security_checker.scanners.untrusted import UntrustedOverrides
 
 STDERR_EXCERPT_LIMIT = 2000

@@ -238,3 +238,33 @@ async def test_timeout_does_not_wait_extra_when_the_parent_exited_first():
     # 猶予を使い切ると timeout + TERM_GRACE_S 以上かかる. それ未満なら待っていない.
     # (3000 ms 固定の上限は、負荷の高い CI でインタプリタの起動が遅いと誤って落ちた)
     assert result.duration_ms < (1.0 + TERM_GRACE_S) * 1000
+
+
+@pytest.mark.skipif(os.name != "posix", reason="プロセスグループは POSIX の概念")
+async def test_cancelling_a_call_stops_the_command_and_its_children(tmp_path):
+    """中断 (Ctrl-C・予算の打ち切り) でも起動したコマンドを残さない (#219)."""
+    pid_file = tmp_path / "pid"
+    script = (
+        "import pathlib,subprocess,sys,time;"
+        "c=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)']);"
+        "pathlib.Path(sys.argv[1]).write_text(str(c.pid));time.sleep(60)"
+    )
+    task = asyncio.create_task(
+        run_sandboxed([sys.executable, "-c", script, str(pid_file)], prompt="x", timeout_s=60)
+    )
+    for _ in range(200):
+        if pid_file.exists() and pid_file.read_text():
+            break
+        await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    child = int(pid_file.read_text())
+    for _ in range(100):
+        try:
+            os.kill(child, 0)
+        except ProcessLookupError:
+            return
+        await asyncio.sleep(0.05)
+    os.kill(child, signal.SIGKILL)
+    pytest.fail("孫プロセスが残っている")

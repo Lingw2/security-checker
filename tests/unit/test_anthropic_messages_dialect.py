@@ -125,7 +125,8 @@ def test_tool_use_block_becomes_parsed_output(dialect: AnthropicMessagesDialect)
     assert parsed.parsed == {"vulnerable": True}
     # text からも復元できる必要がある (上位は text 経由でも検証する)
     assert json.loads(parsed.text) == {"vulnerable": True}
-    assert parsed.usage.input_tokens == 120
+    # キャッシュから読んだ分も「送った入力」に含める (ほかの方言の prompt_tokens と同じ)
+    assert parsed.usage.input_tokens == 120 + 90
     assert parsed.usage.cached_tokens == 90
     assert parsed.finish_reason == "tool_use"
 
@@ -149,3 +150,21 @@ def test_errors_say_what_to_do(dialect: AnthropicMessagesDialect) -> None:
     assert dialect.explain_error(404, '{"error":{"message":"model not found"}}')
     assert dialect.explain_error(400, "max_tokens is too large")
     assert dialect.explain_error(400, "something else") is None
+
+
+def test_cache_creation_tokens_are_counted_as_input() -> None:
+    """キャッシュへの書き込みも入力として課金される. 数え漏らさない (#667)."""
+    dialect = AnthropicMessagesDialect()
+    parsed = dialect.parse_response(
+        {
+            "content": [{"type": "text", "text": "{}"}],
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "cache_creation_input_tokens": 1000,
+                "cache_read_input_tokens": 0,
+            },
+        }
+    )
+    assert parsed.usage.input_tokens == 1010
+    assert parsed.usage.cached_tokens == 0

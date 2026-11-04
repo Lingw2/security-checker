@@ -75,7 +75,7 @@ class ScriptedProvider:
 
     def __init__(
         self,
-        script: Sequence[str | dict[str, Any] | Exception],
+        script: Sequence[str | dict[str, Any] | Exception | CompletionResponse],
         *,
         name: str = "fake-reviewer",
         model: str = "fake-model",
@@ -105,6 +105,9 @@ class ScriptedProvider:
         item = self._script.pop(0)
         if isinstance(item, Exception):
             raise item
+        if isinstance(item, CompletionResponse):
+            # finish_reason などを含めて応答をそのまま返したいとき
+            return item
         text = item if isinstance(item, str) else json.dumps(item, ensure_ascii=False)
         return CompletionResponse(
             text=text,

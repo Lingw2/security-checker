@@ -100,12 +100,9 @@ def resolve_capabilities(
     overrides = CapabilityOverrides.model_validate(
         reviewer.capabilities.model_dump(exclude_none=True)
     )
-    capabilities = overrides.apply(base)
-    if reviewer.max_output_tokens > capabilities.max_output_tokens:
-        capabilities = capabilities.model_copy(
-            update={"max_output_tokens": reviewer.max_output_tokens}
-        )
-    return capabilities
+    # モデルの出力上限は Reviewer の希望では変わらない. 引き上げたいときは
+    # capabilities.max_output_tokens を明示する (上の overrides で効く) (#610)
+    return overrides.apply(base)
 
 
 def build_http_provider(

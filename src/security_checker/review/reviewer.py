@@ -61,6 +61,15 @@ class ReviewOutcome:
         self.trace = trace or {}
 
 
+#: 出力上限で打ち切られたことを示す finish_reason (方言ごとの表記)
+_TRUNCATED_REASONS = frozenset({"length", "max_tokens", "max_output_tokens"})
+
+
+def is_truncated(finish_reason: str | None) -> bool:
+    """出力が上限で切れたか. openai の length・anthropic の max_tokens・gemini の MAX_TOKENS."""
+    return finish_reason is not None and finish_reason.lower() in _TRUNCATED_REASONS
+
+
 class Reviewer:
     """1 つの Provider を Security Auditor として使う."""
 
@@ -123,6 +132,17 @@ class Reviewer:
         try:
             judgement = parse_judgement(response.parsed, response.text)
         except SchemaViolationError as violation:
+            if is_truncated(response.finish_reason):
+                # 出力上限で切れた. 同じ上限で修復を送っても同じ理由で切れ、費用だけがかかる
+                return self.error_outcome(
+                    task,
+                    VerdictStatus.SCHEMA_ERROR,
+                    f"出力が max_output_tokens ({self.max_output_tokens}) で途中で切れました"
+                    f" (finish_reason: {response.finish_reason})。"
+                    "reviewers[].max_output_tokens を増やしてください",
+                    started,
+                    usage=usage,
+                )
             repair_user = prompts.render_repair(
                 violation.raw_text, str(violation), schema, self.language
             )
