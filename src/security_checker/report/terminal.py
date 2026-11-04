@@ -89,9 +89,11 @@ def _candidate_table(report: Report) -> Table:
         severity = candidate.severity_reported or Severity.INFO
         table.add_row(
             Text(severity.value.upper(), style=SEVERITY_STYLE[severity]),
-            candidate.scanner,
-            candidate.title,
-            candidate.where,
+            # 外部由来の文字列は Text で渡す. str だと `app/[slug]/page.tsx` の [slug] が
+            # rich のマークアップとして消える
+            Text(candidate.scanner),
+            Text(candidate.title),
+            Text(candidate.where),
         )
     return table
 
@@ -207,9 +209,18 @@ def render(
     decision: PolicyDecision,
     output_dir: Path,
     console: Console | None = None,
+    *,
+    details: Path | None = None,
 ) -> None:
-    """レポートを描画する (既定は標準出力)."""
-    console = console or Console()
+    """レポートを描画する (既定は標準出力).
+
+    `details` は実際に書き出した詳細レポート. None なら案内しない
+    (書いていないファイルや前回の古いファイルを指さない)。
+    """
+    if console is None:
+        console = Console()
+        if not console.is_terminal:
+            console.soft_wrap = True
     console.print()
     console.print(_header(report))
     console.print()
@@ -272,7 +283,8 @@ def render(
     if report.score.partial:
         score_text.append(f"  (partial: {report.score.partial_reason})", style="yellow")
     console.print(score_text)
-    console.print(Text(f"  詳細: {output_dir / 'report.json'}", style="dim"))
+    if details is not None:
+        console.print(Text(f"  詳細: {details}", style="dim"))
 
     for reason in decision.reasons:
         console.print(Text(f"  ✗ {reason}", style="bold red"))

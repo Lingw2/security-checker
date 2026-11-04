@@ -244,7 +244,7 @@ runner = CliRunner()
 def no_scanners(tmp_path: Path, extra: str = "") -> None:
     (tmp_path / "security-checker.yml").write_text(
         "version: 1\nscanners:\n  semgrep: { enabled: false }\n  gitleaks: { enabled: false }\n"
-        + extra,
+        "  osv: { enabled: false }\n" + extra,
         encoding="utf-8",
     )
 
@@ -268,6 +268,32 @@ def test_cli_baseline_update_refuses_a_broken_run(tmp_path, monkeypatch):
     result = runner.invoke(app, ["baseline", "update", str(tmp_path), "-o", "b.json"])
     assert result.exit_code == ExitCode.EXECUTION_ERROR
     assert not (tmp_path / "b.json").exists()
+
+
+def test_cli_baseline_update_refuses_a_run_with_skipped_scanners(tmp_path, monkeypatch):
+    """未導入のスキャナを含む run を記録すると、導入した日に既存の検出が「新規」になる (#213)."""
+    no_scanners(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    skipped = FakeScanner("osv", status=ScanStatus.SKIPPED, reason="未導入")
+    monkeypatch.setattr("security_checker.run.build_scanners", lambda config: ([skipped], []))
+    result = runner.invoke(app, ["baseline", "update", str(tmp_path), "-o", "b.json"])
+    assert result.exit_code == ExitCode.EXECUTION_ERROR
+    assert "osv (未導入)" in result.output
+    assert not (tmp_path / "b.json").exists()
+
+
+def test_cli_baseline_update_formats_a_broken_ignore_file(tmp_path, monkeypatch):
+    """壊れた ignore ファイルでトレースバックにしない (#192)."""
+    no_scanners(tmp_path, "policy:\n  baseline: nope.json\n")
+    monkeypatch.chdir(tmp_path)
+
+    def broken(*args, **kwargs):
+        raise ConfigError("ignore ファイルが壊れています [x]")
+
+    monkeypatch.setattr("security_checker.cli.load_rules", broken)
+    result = runner.invoke(app, ["baseline", "update", str(tmp_path), "-o", "b.json"])
+    assert result.exit_code == ExitCode.CONFIG_ERROR
+    assert "壊れています [x]" in result.output
 
 
 def test_cli_scan_with_a_missing_baseline_is_a_config_error(tmp_path, monkeypatch):

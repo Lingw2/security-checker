@@ -11,13 +11,16 @@ import json
 import os
 import shlex
 import sys
+import traceback
 from pathlib import Path
 from typing import Annotated, Any, NoReturn
 
 import typer
 import yaml
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
+from rich.text import Text
 
 from security_checker import __version__
 from security_checker.config.loader import (
@@ -40,6 +43,7 @@ from security_checker.github.client import (
     post_comments,
 )
 from security_checker.github.pr import DiffScope, prepare_scope
+from security_checker.language import resolve_language
 from security_checker.models.enums import Severity
 from security_checker.models.report import Report
 from security_checker.observability import logging as log
@@ -69,12 +73,41 @@ app = typer.Typer(
 config_app = typer.Typer(help="設定の確認", no_args_is_help=True)
 app.add_typer(config_app, name="config")
 
-err_console = Console(stderr=True)
+
+def _console(*, stderr: bool = False) -> Console:
+    """出力先が端末でなければ rich に折り返させない.
+
+    CI のログは TTY ではなく、rich は既定の 80 桁で単語の途中でも改行する。
+    コマンドやパスが 2 行に分かれると、コピーしても grep しても使えない。
+    """
+    console = Console(stderr=stderr)
+    if not console.is_terminal:
+        console.soft_wrap = True
+    return console
+
+
+err_console = _console(stderr=True)
 
 
 def _fail(message: str, code: ExitCode) -> NoReturn:
-    err_console.print(f"[bold red]エラー:[/bold red] {redact_known_patterns(message)}")
+    # メッセージはパスやスキャナの出力を含みうる. `[` を rich のマークアップとして読ませない
+    err_console.print(f"[bold red]エラー:[/bold red] {escape(redact_known_patterns(message))}")
     raise typer.Exit(code=int(code))
+
+
+def _print_warnings(console: Console, messages: list[str]) -> None:
+    for message in messages:
+        console.print(f"[yellow]警告[/yellow]: {escape(message)}", highlight=False)
+
+
+def _print_report_warnings(console: Console, report: Report) -> None:
+    """スキャナの skipped / failed と設定の警告.
+
+    「0 件」と「検査できなかった」を見分けられるようにする。
+    """
+    for warning in report.warnings:
+        style = "bold red" if warning.level == "error" else "yellow"
+        console.print(Text(f"{warning.source}: {warning.message}", style=style))
 
 
 def _load(
@@ -83,6 +116,9 @@ def _load(
     preset: str | None,
     overrides: dict[str, Any],
 ) -> LoadedConfig:
+    if not root.is_dir():
+        # 書き間違いを「設定が空」に見せない (既定値だけの設定で続行しない)
+        _fail(f"検査対象が見つかりません: {root}", ExitCode.CONFIG_ERROR)
     try:
         return load_config(root, config_path=config_path, preset=preset, cli_overrides=overrides)
     except ConfigError as exc:
@@ -208,7 +244,15 @@ def _write_reports(loaded: LoadedConfig, outcome: RunOutcome, *, quiet: bool) ->
     if "sarif" in formats:
         write_sarif(outcome.report, outcome.output_dir)
     if not quiet and "terminal" in formats:
-        render(outcome.report, outcome.decision, outcome.output_dir)
+        details = next(
+            (
+                outcome.output_dir / name
+                for fmt, name in (("markdown", "report.md"), ("json", "report.json"))
+                if fmt in formats
+            ),
+            None,
+        )
+        render(outcome.report, outcome.decision, outcome.output_dir, details=details)
 
 
 @app.command()
@@ -310,7 +354,10 @@ def review(
     ] = None,
     dry_run: Annotated[
         bool,
-        typer.Option("--dry-run", help="LLM に送信せず、送信予定の内容を表示する"),
+        typer.Option(
+            "--dry-run",
+            help="LLM に送信せず、送信予定の内容を表示する (--estimate とは同時に指定できない)",
+        ),
     ] = False,
     estimate: Annotated[
         bool,
@@ -350,11 +397,14 @@ def review(
     price_table = load_price_table(
         loaded.config_path.parent if loaded.config_path is not None else None
     )
+    if dry_run and estimate:
+        # 片方を黙って無視しない (P9)
+        _fail("--dry-run と --estimate は同時に指定できません", ExitCode.CONFIG_ERROR)
     if dry_run:
         _dry_run(loaded, root, diff, diff_warnings)
         raise typer.Exit(code=int(ExitCode.OK))
     if estimate:
-        _estimate(loaded, root, diff, price_table)
+        _estimate(loaded, root, diff, diff_warnings, price_table)
         raise typer.Exit(code=int(ExitCode.OK))
 
     try:
@@ -375,20 +425,35 @@ def review(
     raise typer.Exit(code=int(outcome.decision.exit_code))
 
 
+def _scan_for_preview(
+    loaded: LoadedConfig, root: Path, diff: DiffScope | None, diff_warnings: list[str]
+) -> RunOutcome:
+    """--dry-run / --estimate の前段. 本番の review と同じ警告を積み、壊れたら整形して止める."""
+    try:
+        return asyncio.run(
+            run_scan(
+                loaded.config,
+                root,
+                extra_warnings=[*loaded.warnings, *diff_warnings],
+                diff=diff,
+                suppression=_suppression(loaded, root),
+            )
+        )
+    except SecurityCheckerError as exc:
+        _fail(str(exc), exc.exit_code)
+
+
 def _estimate(
-    loaded: LoadedConfig, root: Path, diff: DiffScope | None, price_table: PriceTable
+    loaded: LoadedConfig,
+    root: Path,
+    diff: DiffScope | None,
+    diff_warnings: list[str],
+    price_table: PriceTable,
 ) -> None:
     """何件・いくらかかるかを、送信前に見せる (設計書 §24.3)."""
-    console = Console()
-    outcome = asyncio.run(
-        run_scan(
-            loaded.config,
-            root,
-            extra_warnings=loaded.warnings,
-            diff=diff,
-            suppression=_suppression(loaded, root),
-        )
-    )
+    console = _console()
+    outcome = _scan_for_preview(loaded, root, diff, diff_warnings)
+    _print_report_warnings(console, outcome.report)
     tasks, overflow = build_tasks(outcome.report.candidates, root, loaded.config)
     result = estimate_run(tasks, loaded.config, price_table)
     console.print(
@@ -399,9 +464,9 @@ def _estimate(
     for item in result.reviewers:
         usd = f"${item.usd:.4f}" if item.usd is not None else "unknown"
         console.print(
-            f"  {item.name:<20} {item.calls:>4} 回  入力 約 {item.input_tokens:,}  "
+            f"  {escape(item.name):<20} {item.calls:>4} 回  入力 約 {item.input_tokens:,}  "
             f"出力 最大 {item.max_output_tokens:,}  {usd}"
-            + (f"  [dim]{item.note}[/dim]" if item.note else "")
+            + (f"  [dim]{escape(item.note)}[/dim]" if item.note else "")
         )
     total = result.total_usd
     budget = loaded.config.budget.max_usd
@@ -424,22 +489,16 @@ def _estimate(
 def _dry_run(
     loaded: LoadedConfig, root: Path, diff: DiffScope | None, diff_warnings: list[str]
 ) -> None:
-    """何が送信されるかを、送信前に全部見せる (設計書 §19.3)."""
-    console = Console()
-    outcome = asyncio.run(
-        run_scan(
-            loaded.config,
-            root,
-            extra_warnings=[*loaded.warnings, *diff_warnings],
-            diff=diff,
-            suppression=_suppression(loaded, root),
-        )
-    )
-    for message in diff_warnings:
-        console.print(f"[yellow]警告[/yellow]: {message}", highlight=False)
+    """何が送信されるかを、送信前に全部見せる (設計書 §19.3).
+
+    プロンプトはコードを含む. rich のマークアップとして解釈させない (`[slug]` などが消える)。
+    """
+    console = _console()
+    outcome = _scan_for_preview(loaded, root, diff, diff_warnings)
+    _print_report_warnings(console, outcome.report)
     if diff is not None:
         console.print(
-            f"[bold]diff[/bold]: {diff.base} との差分 ({len(diff.changed_files)} ファイル) "
+            f"[bold]diff[/bold]: {escape(diff.base)} との差分 ({len(diff.changed_files)} ファイル) "
             f"に関係する候補だけを送信します (対象外 {len(outcome.report.outside_diff)} 件)"
         )
     tasks, overflow = build_tasks(outcome.report.candidates, root, loaded.config)
@@ -449,27 +508,43 @@ def _dry_run(
         f"{len(tasks)} 件を送信予定 (超過 {len(overflow)} 件は未レビュー)"
     )
     console.print(
-        f"[bold]reviewers[/bold]: "
-        f"{', '.join(r.name for r in loaded.config.reviewers) or '(未設定)'}"
+        Text.assemble(
+            ("reviewers", "bold"),
+            ": " + (", ".join(r.name for r in loaded.config.reviewers) or "(未設定)"),
+        )
+    )
+    # system プロンプトは全タスク共通. 言語指示は output.language とロケールで変わるので必ず見せる
+    configured = loaded.config.output.language
+    language = resolve_language(configured)
+    system = prompts.render_system(language)
+    console.print(
+        Panel(
+            Text(system),
+            title=Text(
+                f"system (全タスク共通)  language: {language} ← output.language: {configured}"
+            ),
+            title_align="left",
+            border_style="magenta",
+        )
     )
     schema = verdict_schema()
+    system_tokens = estimate_tokens(system)
     total = 0
     for task in tasks:
         user = prompts.render_user(task, schema)
-        total += estimate_tokens(user)
+        total += system_tokens + estimate_tokens(user)
         console.print(
             Panel(
-                user,
-                title=f"{task.candidate.id}  {task.candidate.where}",
+                Text(user),
+                title=Text(f"{task.candidate.id}  {task.candidate.where}"),
                 title_align="left",
                 border_style="blue",
             )
         )
     console.print(
-        f"[bold]推定入力トークン[/bold]: 約 {total:,} "
-        f"(× Reviewer {len(loaded.config.reviewers)} 個)"
+        f"[bold]推定入力トークン[/bold]: 約 {total:,} (system を含む. "
+        f"× Reviewer {len(loaded.config.reviewers)} 個)"
     )
-    console.print("[dim]system プロンプトは全タスク共通です[/dim]")
 
 
 INIT_HEADER = """\
@@ -511,7 +586,7 @@ def _print_detections(console: Console, detections: list[Detection]) -> list[Det
             console.print("    [dim](プリセットがありません)[/dim]")
         for item in rows:
             mark = "[green]✓[/green]" if item.available else "[dim]✗[/dim]"
-            console.print(f"    {mark} {item.name:<28} [dim]({item.detail})[/dim]")
+            console.print(f"    {mark} {escape(item.name):<28} [dim]({escape(item.detail)})[/dim]")
             if item.available:
                 usable.append(item)
         console.print()
@@ -550,7 +625,7 @@ def init(
     root = path.expanduser().resolve()
     if not root.is_dir():
         _fail(f"ディレクトリが見つかりません: {path}", ExitCode.CONFIG_ERROR)
-    console = Console()
+    console = _console()
 
     usable = _print_detections(console, detect_all())
     blocks: list[dict[str, Any]] = []
@@ -565,7 +640,7 @@ def init(
         usable = []
     elif usable and not yes:
         for index, item in enumerate(usable, start=1):
-            console.print(f"    [bold]{index}[/bold]. {item.name} ({item.transport})")
+            console.print(f"    [bold]{index}[/bold]. {escape(item.name)} ({item.transport})")
         answer = typer.prompt(
             "Reviewer にするものを番号で (カンマ区切り・空欄で全部・'-' で選ばない)",
             default="",
@@ -613,7 +688,7 @@ def init(
             ExitCode.CONFIG_ERROR,
         )
     destination.write_text(document, encoding="utf-8")
-    console.print(f"[green]書き出しました[/green]: {destination}")
+    console.print(f"[green]書き出しました[/green]: {escape(str(destination))}")
     if local:
         console.print(
             "[dim]このファイルは共有設定に後勝ちで重なります。"
@@ -632,7 +707,9 @@ def _select(usable: list[Detection], answer: str, console: Console) -> list[Dete
     for token in answer.split(","):
         cleaned = token.strip()
         if not cleaned.isdigit() or not 1 <= int(cleaned) <= len(usable):
-            console.print(f"[yellow]無視しました[/yellow]: '{cleaned}' は番号ではありません")
+            console.print(
+                f"[yellow]無視しました[/yellow]: '{escape(cleaned)}' は番号ではありません"
+            )
             continue
         chosen.append(usable[int(cleaned) - 1])
     return chosen
@@ -650,20 +727,21 @@ def config_show(
     """解決された最終設定を出力する (秘匿値は保持しない設計のため常に安全)."""
     root = path.expanduser().resolve()
     loaded = _load(root, config_path, preset, {})
-    console = Console()
+    console = _console()
 
     # 受け付けたが効かない設定は、config show でも必ず見えるようにする (P9)。
     # 既定の出力は JSON なので、警告は標準エラーに出して混ぜない。
-    warn_console = Console(stderr=True)
-    for message in loaded.warnings:
-        warn_console.print(f"[yellow]警告[/yellow]: {message}", highlight=False)
+    warn_console = _console(stderr=True)
+    _print_warnings(warn_console, list(loaded.warnings))
 
     if explain:
-        console.print(f"[bold]preset[/bold]: {loaded.preset or '(なし)'}")
-        console.print(f"[bold]config file[/bold]: {loaded.config_path or '(なし)'}")
-        console.print(f"[bold]local config[/bold]: {loaded.local_config_path or '(なし)'}")
+        console.print(f"[bold]preset[/bold]: {escape(str(loaded.preset or '(なし)'))}")
+        console.print(f"[bold]config file[/bold]: {escape(str(loaded.config_path or '(なし)'))}")
+        console.print(
+            f"[bold]local config[/bold]: {escape(str(loaded.local_config_path or '(なし)'))}"
+        )
         for key in sorted(loaded.origins):
-            console.print(f"  {key} [dim]← {loaded.origins[key]}[/dim]")
+            console.print(f"  {escape(key)} [dim]← {escape(str(loaded.origins[key]))}[/dim]")
         return
 
     print(json.dumps(loaded.config.masked_dump(), ensure_ascii=False, indent=2))
@@ -705,10 +783,11 @@ def baseline_update(
     config = loaded.config.model_copy(
         update={"policy": loaded.config.policy.model_copy(update={"baseline": None})}
     )
-    rules = load_rules(
-        config, root, config_dir=config_dir, untrusted_target=loaded.untrusted_target
-    )
+    _print_warnings(err_console, list(loaded.warnings))
     try:
+        rules = load_rules(
+            config, root, config_dir=config_dir, untrusted_target=loaded.untrusted_target
+        )
         outcome = asyncio.run(run_scan(config, root, suppression=rules, diff=None))
     except SecurityCheckerError as exc:
         _fail(str(exc), exc.exit_code)
@@ -716,11 +795,21 @@ def baseline_update(
         # 壊れた run を baseline にすると、失敗したスキャナの既存の検出が「新規」扱いになる
         failed = ", ".join(r.scanner for r in outcome.report.scanners if r.status.value == "failed")
         _fail(f"スキャナが失敗したため baseline を更新しません: {failed}", ExitCode.EXECUTION_ERROR)
+    skipped = [r for r in outcome.report.scanners if r.status.value == "skipped"]
+    if skipped:
+        # 未導入のスキャナの既存の検出は、導入した日にすべて「新規」になる。
+        # 0 件の baseline を黙って書かない
+        detail = ", ".join(f"{r.scanner} ({r.reason or 'skipped'})" for r in skipped)
+        _fail(
+            f"スキップされたスキャナがあるため baseline を更新しません: {detail}。"
+            "導入するか、使わないなら scanners.<name>.enabled: false にしてください",
+            ExitCode.EXECUTION_ERROR,
+        )
 
     write_baseline(destination, outcome.report.candidates, tool_version=__version__)
-    console = Console()
+    console = _console()
     console.print(
-        f"[green]baseline を書き出しました[/green]: {destination} "
+        f"[green]baseline を書き出しました[/green]: {escape(str(destination))} "
         f"({len(outcome.report.candidates)} 件)"
     )
     if configured is None:
@@ -729,7 +818,8 @@ def baseline_update(
             if destination.is_relative_to(config_dir)
             else destination
         )
-        console.print(f"有効にするには設定に次を書いてください:\n  policy:\n    baseline: {shown}")
+        hint = f"  policy:\n    baseline: {escape(str(shown))}"
+        console.print(f"有効にするには設定に次を書いてください:\n{hint}")
 
 
 @app.command()
@@ -787,9 +877,8 @@ def comment(
     except SecurityCheckerError as exc:
         _fail(str(exc), exc.exit_code)
 
-    console = Console()
-    for message in result.warnings:
-        err_console.print(f"[yellow]警告[/yellow]: {message}", highlight=False)
+    console = _console()
+    _print_warnings(err_console, list(result.warnings))
     console.print(
         f"summary: {result.summary_action}"
         + (f" ({result.summary_url})" if result.summary_url else "")
@@ -807,7 +896,7 @@ app.add_typer(providers_app, name="providers")
 @providers_app.command("list")
 def providers_list() -> None:
     """使える transport・方言・プリセット・プラグインを一覧する (設計書 §29.3)."""
-    console = Console()
+    console = _console()
     found = catalog()
     console.print("[bold]transport: http[/bold]  方言: " + ", ".join(found.dialects))
     console.print("[bold]transport: process[/bold]  任意のコマンド (command を直接書けば動く)")
@@ -819,12 +908,12 @@ def providers_list() -> None:
         if not presets:
             console.print("  [dim](なし)[/dim]")
         for name, source in presets.items():
-            console.print(f"  {name} [dim]({source})[/dim]")
+            console.print(f"  {escape(name)} [dim]({escape(str(source))})[/dim]")
     console.print("[bold]プラグイン[/bold] (entry_points: security_checker.providers)")
     for name in found.plugins or ["(なし)"]:
-        console.print(f"  {name}")
+        console.print(Text(f"  {name}"))
     for message in found.warnings:
-        err_console.print(f"[yellow]警告[/yellow]: {message}", highlight=False)
+        err_console.print(f"[yellow]警告[/yellow]: {escape(message)}", highlight=False)
 
 
 @providers_app.command("check")
@@ -848,23 +937,26 @@ def providers_check(
     """
     root = path.expanduser().resolve()
     loaded = _load(root, config_path, None, {})
+    _print_warnings(err_console, list(loaded.warnings))
     reviewers = [r for r in loaded.config.reviewers if name is None or r.name == name]
     if not reviewers:
         _fail(
             f"Reviewer '{name}' は設定にありません" if name else "reviewers が設定されていません",
             ExitCode.CONFIG_ERROR,
         )
-    console = Console()
+    console = _console()
     failed = False
     for reviewer in reviewers:
         result = asyncio.run(check_reviewer(reviewer, probe=not no_probe))
         mark = "[green]✓[/green]" if result.ok else "[red]✗[/red]"
-        console.print(f"{mark} [bold]{result.name}[/bold] ({result.transport})")
+        console.print(f"{mark} [bold]{escape(result.name)}[/bold] ({result.transport})")
         for step in result.steps:
             step_mark = "[green]ok[/green]" if step.ok else "[red]NG[/red]"
-            console.print(f"    {step.label:<8} {step_mark}  {step.detail}", highlight=False)
+            console.print(
+                f"    {step.label:<8} {step_mark}  {escape(step.detail)}", highlight=False
+            )
         for suggestion in result.suggestions:
-            console.print(f"    [yellow]→[/yellow] {suggestion}", highlight=False)
+            console.print(f"    [yellow]→[/yellow] {escape(suggestion)}", highlight=False)
         failed = failed or not result.ok
     raise typer.Exit(code=int(ExitCode.EXECUTION_ERROR if failed else ExitCode.OK))
 
@@ -924,8 +1016,7 @@ def eval_command(
     root = (config_path.parent if config_path is not None else Path.cwd()).resolve()
     loaded = _load(root, config_path, None, {})
     # 標準出力は比較表 (Markdown) のために空けておく。`> result.md` に警告が混ざらないように
-    for message in loaded.warnings:
-        err_console.print(f"[yellow]警告[/yellow]: {message}", highlight=False)
+    _print_warnings(err_console, list(loaded.warnings))
 
     try:
         dataset = load_dataset(dataset_dir)
@@ -982,8 +1073,18 @@ def main() -> None:
     try:
         app()
     except SecurityCheckerError as exc:  # pragma: no cover - 最後の砦
-        err_console.print(f"[bold red]エラー:[/bold red] {redact_known_patterns(str(exc))}")
+        err_console.print(f"[bold red]エラー:[/bold red] {escape(redact_known_patterns(str(exc)))}")
         sys.exit(int(exc.exit_code))
+    except Exception as exc:
+        # 想定外の例外 (書けない出力先・ディスク不足など) を
+        # exit 1 (ポリシー違反) に見せない (§20.1)
+        detail = redact_known_patterns("".join(traceback.format_exception(exc)))
+        sys.stderr.write(detail)
+        err_console.print(
+            f"[bold red]内部エラー:[/bold red] {escape(redact_known_patterns(str(exc)))} "
+            "(バグの可能性があります。上のスタックトレースを添えて報告してください)"
+        )
+        sys.exit(int(ExitCode.EXECUTION_ERROR))
 
 
 if __name__ == "__main__":  # pragma: no cover
