@@ -4,15 +4,18 @@
 `~/.cache/security-checker/quota.json` (XDG_CACHE_HOME を尊重) に Reviewer ごとの
 当日の呼び出し回数を保存する。日付は UTC で区切る (提供元のリセット時刻とずれることがある)。
 
-同時に複数の security-checker を走らせると数え漏れが起きうる。上限ちょうどまで使う
-運用は避け、少し余裕を持たせること。
+読み・足し・書きはロックファイル (`quota.json.lock`) の排他ロックの中で行い、
+同時に走らせた security-checker どうしで数え漏れを起こさない (#450)。
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
-from collections.abc import Callable
+import sys
+import tempfile
+from collections.abc import Callable, Iterator
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
@@ -59,7 +62,15 @@ class QuotaStore:
         return max(0, limit - self.used(key))
 
     def consume(self, key: str, count: int = 1) -> int:
-        """回数を足して保存し、当日の累計を返す."""
+        """回数を足して保存し、当日の累計を返す. ほかのプロセスとは排他で読み書きする."""
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            self.errors.append(f"クォータの記録 {self.path} に書けません: {exc}")
+        with _locked(self.path.with_name(self.path.name + ".lock"), self.errors):
+            return self._consume_unlocked(key, count)
+
+    def _consume_unlocked(self, key: str, count: int) -> int:
         data = self._load()
         today = self._today().isoformat()
         day = data.get(today)
@@ -71,13 +82,57 @@ class QuotaStore:
         for stale in sorted(data)[:-KEEP_DAYS]:
             data.pop(stale, None)
         try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-            tmp.replace(self.path)
+            # 一時ファイル名は一意にする (同じ名前だと、ほかのプロセスの書きかけを置き換える)
+            with tempfile.NamedTemporaryFile(
+                "w", encoding="utf-8", dir=self.path.parent, prefix=".quota-", delete=False
+            ) as handle:
+                handle.write(json.dumps(data, ensure_ascii=False, indent=2))
+            Path(handle.name).replace(self.path)
         except OSError as exc:
             self.errors.append(f"クォータの記録 {self.path} に書けません: {exc}")
         return int(day[key])
+
+
+@contextlib.contextmanager
+def _locked(lock_path: Path, errors: list[str]) -> Iterator[None]:
+    """プロセス間の排他ロック. 取れなくても実行は止めない (警告にして続ける)."""
+    try:
+        handle = lock_path.open("a+b")
+    except OSError as exc:
+        errors.append(f"クォータのロック {lock_path} を開けません: {exc}")
+        yield
+        return
+    try:
+        try:
+            _lock(handle.fileno())
+        except OSError as exc:
+            errors.append(f"クォータのロック {lock_path} を取れません: {exc}")
+        yield
+    finally:
+        with contextlib.suppress(OSError):
+            _unlock(handle.fileno())
+        handle.close()
+
+
+if sys.platform == "win32":  # pragma: no cover - Windows でだけ通る
+    import msvcrt
+
+    def _lock(fd: int) -> None:
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+
+    def _unlock(fd: int) -> None:
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+
+else:
+    import fcntl
+
+    def _lock(fd: int) -> None:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+
+    def _unlock(fd: int) -> None:
+        fcntl.flock(fd, fcntl.LOCK_UN)
 
 
 def quota_key(reviewer: str, model: str | None) -> str:

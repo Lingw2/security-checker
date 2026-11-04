@@ -90,6 +90,8 @@ class Reviewer:
         self.provider = provider
         self.weight = weight
         self.max_output_tokens = max_output_tokens
+        #: 候補 ID → 最後に送った (system, user). トレースに記録する
+        self._prompts: dict[str, tuple[str, str]] = {}
         self.timeout_s = timeout_s
         self.seed = seed
         self.price = price
@@ -123,7 +125,9 @@ class Reviewer:
             system = prompts.render_judge_system(self.language)
             user = prompts.render_judge_user(task, schema, opinions)
         started = time.monotonic()
-        self._last_prompt = (system, user)
+        # 候補ごとに持つ. 同じ Reviewer を並行して呼ぶと、1 つの属性では別の候補の
+        # プロンプトがトレースに残る (#315)
+        self._prompts[task.candidate.id] = (system, user)
 
         if before_send is not None:
             await before_send()
@@ -158,6 +162,7 @@ class Reviewer:
                         started,
                         usage=usage,
                     )
+            self._prompts[task.candidate.id] = (system, repair_user)
             repaired = await self._complete(system, repair_user, schema)
             usage = usage.merge(repaired.usage)
             try:
@@ -281,7 +286,7 @@ class Reviewer:
         error: str | None = None,
     ) -> dict[str, Any]:
         """1 呼び出し分の監査証跡 (§24.2). 既定はプロンプトのハッシュのみ."""
-        system, user = getattr(self, "_last_prompt", ("", ""))
+        system, user = self._prompts.get(task.candidate.id, ("", ""))
         prompt: dict[str, Any] = {
             "system_sha256": sha256_text(system),
             "user_sha256": sha256_text(user),

@@ -260,3 +260,30 @@ def test_max_output_tokens_is_clamped_to_the_model_limit():
     setup = build_reviewers(config, environ={})
     assert setup.runtimes[0].reviewer.max_output_tokens == 1024
     assert any("1024" in w for w in setup.warnings)
+
+
+async def test_concurrent_reviews_trace_their_own_prompts():
+    """同じ Reviewer を並行して呼んでも、トレースには自分の候補のプロンプトが残る (#315)."""
+    import asyncio
+
+    from security_checker.observability.trace import sha256_text
+    from security_checker.review import prompts
+    from security_checker.review.structured import verdict_schema
+
+    class SlowProvider(ScriptedProvider):
+        async def complete(self, req):
+            # 1 件目を遅らせ、2 件目のプロンプトが先に設定される順序にする
+            await asyncio.sleep(0.05 if "c-slow" in req.user else 0)
+            return await super().complete(req)
+
+    provider = SlowProvider([verdict_payload(), verdict_payload()])
+    reviewer = Reviewer("r1", provider)
+    base = make_task()
+    slow = base.model_copy(update={"candidate": base.candidate.model_copy(update={"id": "c-slow"})})
+    fast = base.model_copy(update={"candidate": base.candidate.model_copy(update={"id": "c-fast"})})
+    outcomes = await asyncio.gather(reviewer.review(slow), reviewer.review(fast))
+    schema = verdict_schema()
+    for task, outcome in zip((slow, fast), outcomes, strict=True):
+        expected = sha256_text(prompts.render_user(task, schema))
+        assert outcome.trace is not None
+        assert outcome.trace["prompt"]["user_sha256"] == expected
