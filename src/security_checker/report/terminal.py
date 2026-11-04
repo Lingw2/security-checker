@@ -92,7 +92,7 @@ def _candidate_table(report: Report) -> Table:
             # 外部由来の文字列は Text で渡す. str だと `app/[slug]/page.tsx` の [slug] が
             # rich のマークアップとして消える
             Text(candidate.scanner),
-            Text(candidate.title),
+            Text(candidate.title + (" (値はマスク済み)" if candidate.redacted else "")),
             Text(candidate.where),
         )
     return table
@@ -106,6 +106,8 @@ def _finding_panel(finding: Finding, style: str) -> Panel:
         body.append(f"{', '.join(finding.cwe[:2]):<12} ", style="cyan")
     body.append(finding.summary or candidate.message[:120])
     body.append(f"\n{candidate.where}", style="dim")
+    if candidate.redacted:
+        body.append("   値はマスクして保存・送信", style="dim")
     body.append(f"   confidence {finding.confidence:.2f}", style="dim")
     body.append(f"   agreement: {finding.agreement.value}", style="dim")
 

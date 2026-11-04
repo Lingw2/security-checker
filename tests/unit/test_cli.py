@@ -54,6 +54,7 @@ def test_scan_respects_output_dir_and_quiet(tmp_path, monkeypatch):
 def test_scan_writes_sarif_when_requested(tmp_path, monkeypatch):
     (tmp_path / "security-checker.yml").write_text(
         "version: 1\nscanners:\n  semgrep: { enabled: false }\n  gitleaks: { enabled: false }\n"
+        "  osv: { enabled: false }\n"
         "output:\n  formats: [json, sarif]\n",
         encoding="utf-8",
     )

@@ -172,7 +172,7 @@ class GitleaksScanner(BaseScanner):
     async def scan(self, target: Target, ctx: ScanContext) -> ScanResult:
         status = self.probe()
         if not status.available:
-            return self.skipped(status.reason or "gitleaks が利用できません")
+            return self.skipped(status.reason or "gitleaks が利用できません", unavailable=True)
 
         raw_path = ctx.raw_dir / "gitleaks.json"
         with tempfile.TemporaryDirectory(prefix="security-checker-gitleaks-") as tmpdir:

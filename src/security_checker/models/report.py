@@ -31,6 +31,8 @@ class ScannerRun(BaseModel):
     stderr_excerpt: str | None = None
     raw_path: str | None = None
     parse_warnings: list[str] = Field(default_factory=list)
+    #: skipped のうち、有効にしたのに入っていない・起動できないもの
+    unavailable: bool = False
 
 
 class SuppressedCandidate(BaseModel):

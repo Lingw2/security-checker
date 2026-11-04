@@ -180,7 +180,7 @@ class SemgrepScanner(BaseScanner):
     async def scan(self, target: Target, ctx: ScanContext) -> ScanResult:
         status = self.probe()
         if not status.available:
-            return self.skipped(status.reason or "semgrep が利用できません")
+            return self.skipped(status.reason or "semgrep が利用できません", unavailable=True)
 
         raw_path = ctx.raw_dir / "semgrep.json"
         argv = ["semgrep", "scan"]

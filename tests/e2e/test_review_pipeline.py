@@ -153,7 +153,10 @@ async def test_trace_is_written_with_hashes(workspace, tmp_path):
         reviewer_setup=setup_with([verdict_payload()]),
     )
 
-    trace_dir = Path(outcome.report.trace_dir or "")
+    # trace_dir は出力先からの相対 (レポートに絶対パスを残さない)
+    assert outcome.report.trace_dir is not None
+    assert not Path(outcome.report.trace_dir).is_absolute()
+    trace_dir = outcome.output_dir / outcome.report.trace_dir
     run = json.loads((trace_dir / "run.json").read_text(encoding="utf-8"))
     assert run["target"] == workspace.name  # 絶対パスを残さない (§6.1)
     call = json.loads((trace_dir / "calls" / "0000.json").read_text(encoding="utf-8"))

@@ -201,15 +201,31 @@ def _suppress(
     return kept, suppressed
 
 
+def _target_label(root: Path) -> str:
+    """レポートに載せる検査対象の名前. 絶対パス (ユーザー名・構成) を残さない (§6.1)."""
+    return root.name or root.anchor or "."
+
+
+def output_relative(path: Path, output_dir: Path) -> str:
+    """出力先からの相対パス. 外にあるもの (指定で出力先を分けた場合) はそのまま."""
+    try:
+        return path.resolve().relative_to(output_dir.resolve()).as_posix()
+    except ValueError:
+        return str(path)
+
+
 def _scope(
     candidates: list[Candidate], root: Path, diff: DiffScope | None
 ) -> tuple[list[Candidate], list[Candidate], TargetInfo]:
     """diff モードなら変更に関係する候補だけに絞る (§7.4)."""
     if diff is None:
-        return candidates, [], TargetInfo(root=str(root), mode="full")
+        return candidates, [], TargetInfo(root=_target_label(root), mode="full")
     inside, outside = diff.split(candidates)
     target = TargetInfo(
-        root=str(root), mode="diff", changed_files=len(diff.changed_files), base=diff.base
+        root=_target_label(root),
+        mode="diff",
+        changed_files=len(diff.changed_files),
+        base=diff.base,
     )
     return inside, outside, target
 
@@ -297,8 +313,11 @@ async def _execute_scanners(
                 version=result.version,
                 reason=result.reason,
                 stderr_excerpt=result.stderr_excerpt,
-                raw_path=str(result.raw_path) if result.raw_path else None,
+                raw_path=output_relative(result.raw_path, raw_dir.parent)
+                if result.raw_path
+                else None,
                 parse_warnings=result.parse_warnings,
+                unavailable=result.unavailable,
             )
         )
         if result.status is ScanStatus.FAILED:
@@ -590,7 +609,7 @@ async def run_review(
         finding_counts=count_by_status(findings),
         usage=schedule.usage,
         stopped_reason=schedule.stopped_reason,
-        trace_dir=str(trace.root),
+        trace_dir=output_relative(trace.root, output_dir),
     )
     decision = evaluate(report, config.policy)
     _log_finish(report, decision)

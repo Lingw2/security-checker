@@ -292,7 +292,7 @@ runs:
         fi
         ok=$(python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); print(all(i.get("executionSuccessful") for r in s["runs"] for i in r["invocations"]))' "$sarif")
         if [[ "$ok" != "True" ]]; then
-          echo "::error::失敗したスキャナがあるため SARIF をアップロードしません (既存の alert が誤って閉じるのを防ぐ)"
+          echo "::error::失敗した、または導入されていないスキャナがあるため SARIF をアップロードしません (既存の alert が誤って閉じるのを防ぐ)"
           exit 0
         fi
         echo "upload=true" >> "$GITHUB_OUTPUT"

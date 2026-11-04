@@ -198,8 +198,9 @@ SARIF は次の規約で作られます (§18.3〜18.4)。
 Ruleset では Alerts の閾値に `Errors` を選び、Security alerts の閾値は `None` にしてください。
 代わりに Security タブの Critical / High の表示は出ません。
 
-- **スキャナが 1 つでも失敗した run の SARIF はアップロードしません。** 一部の結果が欠けた SARIF を
-  上げると、既存の alert が「解決済み」として一括で閉じるためです。
+- **スキャナが 1 つでも失敗した run、または有効にしたスキャナが入っていない run の SARIF は
+  アップロードしません。** 一部の結果が欠けた SARIF を上げると、既存の alert が「解決済み」として
+  一括で閉じるためです。対象が無いだけの skip (osv-scanner のマニフェストが無いなど) は止めません。
   `invocations[].executionSuccessful: false` で判別でき、action はこれを見てスキップします。
   exit code 3 で status check も落ちます。
 - diff モードでレビューしなかった候補も `note` で出します。出さなければ既存 alert が閉じ、

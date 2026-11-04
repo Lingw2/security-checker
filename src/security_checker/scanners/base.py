@@ -78,6 +78,8 @@ class ScanResult(BaseModel):
     version: str | None = None
     reason: str | None = None
     parse_warnings: list[str] = []
+    #: skipped のうち「入れていない・起動できない」. 対象が無いだけの skip とは区別する
+    unavailable: bool = False
 
 
 class Scanner(Protocol):
@@ -189,13 +191,16 @@ class BaseScanner:
 
     # --- 結果生成のヘルパ ---------------------------------------------------
 
-    def skipped(self, reason: str, *, version: str | None = None) -> ScanResult:
+    def skipped(
+        self, reason: str, *, version: str | None = None, unavailable: bool = False
+    ) -> ScanResult:
         return ScanResult(
             scanner=self.name,
             category=self.category,
             status=ScanStatus.SKIPPED,
             reason=reason,
             version=version,
+            unavailable=unavailable,
         )
 
     def failed(

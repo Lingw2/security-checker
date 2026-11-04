@@ -186,7 +186,7 @@ class TrivyScanner(BaseScanner):
     async def scan(self, target: Target, ctx: ScanContext) -> ScanResult:
         status = self.probe()
         if not status.available:
-            return self.skipped(status.reason or "trivy が利用できません")
+            return self.skipped(status.reason or "trivy が利用できません", unavailable=True)
 
         selected, config_warnings = resolve_trivy_scanners(self.settings.scanners)
         if not selected:

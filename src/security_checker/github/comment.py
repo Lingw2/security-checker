@@ -253,6 +253,8 @@ def _summary_block(finding: Finding) -> list[str]:
         f"agreement **{finding.agreement.value}**",
         "",
     ]
+    if candidate.redacted:
+        lines += [f"> {md.REDACTED_NOTE}", ""]
     ok = [v for v in finding.verdicts if v.status.value == "ok" and v.vulnerable]
     path = next((v.attack_path for v in ok if v.attack_path), [])
     if path:
@@ -353,6 +355,8 @@ def render_inline(finding: Finding) -> str:
         )
     lines = [finding_marker(finding), head, ""]
     lines.append(_one_line(finding.summary or candidate.message, 300))
+    if candidate.redacted:
+        lines += ["", md.REDACTED_NOTE]
     reasoning = finding.supporting_reasoning
     if reasoning:
         lines += ["", _one_line(reasoning, 600)]

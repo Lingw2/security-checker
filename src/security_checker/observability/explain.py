@@ -72,9 +72,11 @@ def explain(report: Report, finding_id: str, *, report_path: Path | None = None)
 
 
 def _trace_dir(report: Report, report_path: Path | None) -> Path | None:
-    """trace_dir は実行時の絶対パス. 別の場所に持ってきたレポートでも見つかるようにする."""
+    """trace_dir は出力先からの相対 (古いレポートでは絶対パス). 移したレポートでも見つける."""
     candidates: list[Path] = []
     if report.trace_dir:
+        if report_path is not None:
+            candidates.append(report_path.parent / report.trace_dir)
         candidates.append(Path(report.trace_dir))
     if report_path is not None:
         candidates.append(report_path.parent / "trace" / report.run_id)

@@ -24,6 +24,9 @@ from security_checker.report import sanitize as md
 MAX_FINDINGS_PER_SECTION = 20
 MAX_CANDIDATE_ROWS = 50
 MAX_ATTACK_PATH_STEPS = 8
+#: 未レビューの一覧と warn の上限. report.md は Step Summary (1 ステップ 1 MiB) にそのまま載る
+MAX_LIST_ITEMS = 50
+REDACTED_NOTE = md.REDACTED_NOTE
 
 SEVERITY_MARK = {
     Severity.CRITICAL: "🔴",
@@ -146,14 +149,19 @@ def _summary(report: Report) -> list[str]:
 
 
 def _warnings(report: Report) -> list[str]:
-    """警告は畳まずに全部出す. 「壊れているのに緑」を作らないため (§7.2)."""
+    """エラーは畳まずに全部出す. 「壊れているのに緑」を作らないため (§7.2).
+
+    warn は件数が膨らみうる (semgrep の parse 警告など) ので上限で切り、残りの件数を書く。
+    """
     errors = [w for w in report.warnings if w.level == "error"]
     notices = [w for w in report.warnings if w.level == "warn"]
     if not errors and not notices:
         return []
     lines = ["## 警告", ""]
     lines += [f"- ❌ **{w.source}**: {_flatten(w.message)}" for w in errors]
-    lines += [f"- ⚠️ {w.source}: {_flatten(w.message)}" for w in notices]
+    lines += [f"- ⚠️ {w.source}: {_flatten(w.message)}" for w in notices[:MAX_LIST_ITEMS]]
+    if len(notices) > MAX_LIST_ITEMS:
+        lines.append(f"- _ほか {len(notices) - MAX_LIST_ITEMS} 件の警告は `report.json` を参照_")
     lines.append("")
     return lines
 
@@ -173,8 +181,11 @@ def _findings(report: Report) -> list[str]:
                 "",
             ]
             lines += [
-                f"- {md.code_span(f.candidate.where)} {_flatten(f.candidate.title)}" for f in group
+                f"- {md.code_span(f.candidate.where)} {_flatten(f.candidate.title)}"
+                for f in group[:MAX_LIST_ITEMS]
             ]
+            if len(group) > MAX_LIST_ITEMS:
+                lines.append(f"- _ほか {len(group) - MAX_LIST_ITEMS} 件は `report.json` を参照_")
             lines.append("")
             continue
         for finding in group[:MAX_FINDINGS_PER_SECTION]:
@@ -206,6 +217,9 @@ def _finding_block(finding: Finding) -> list[str]:
         meta.insert(0, "**CWE** " + ", ".join(finding.cwe[:3]))
     lines += [" ・ ".join(meta), ""]
     lines += [f"検出元: `{candidate.scanner}` / `{candidate.rule_id}`", ""]
+
+    if candidate.redacted:
+        lines += [f"> {REDACTED_NOTE}", ""]
 
     summary = finding.summary or candidate.message
     if summary:
@@ -261,8 +275,11 @@ def _candidates(report: Report) -> list[str]:
         severity = candidate.severity_reported or Severity.INFO
         lines.append(
             f"| {SEVERITY_MARK[severity]} {severity.value} | `{candidate.scanner}` | "
-            f"{_flatten(candidate.title)} | {md.code_span(candidate.where)} |"
+            f"{_flatten(candidate.title)}{' 🔒' if candidate.redacted else ''} | "
+            f"{md.code_span(candidate.where)} |"
         )
+    if any(c.redacted for c in report.candidates[:MAX_CANDIDATE_ROWS]):
+        lines += ["", f"_{REDACTED_NOTE[2:]} (🔒 の候補)_"]
     if len(report.candidates) > MAX_CANDIDATE_ROWS:
         remaining = len(report.candidates) - MAX_CANDIDATE_ROWS
         lines += ["", f"_ほか {remaining} 件は `report.json` を参照_"]
