@@ -55,6 +55,13 @@ _SUMMARY_ORDER = (
     FindingStatus.LIKELY,
 )
 
+#: 判定できなかった候補. 0 件でなければ「問題なし」とは書かない (§7.2)
+_UNRESOLVED = (
+    FindingStatus.NOT_REVIEWED,
+    FindingStatus.ERROR,
+    FindingStatus.INCONCLUSIVE,
+)
+
 
 # --- 無害化 ------------------------------------------------------------------
 
@@ -92,10 +99,23 @@ def visible_findings(report: Report) -> list[Finding]:
     ]
 
 
+def unresolved_findings(report: Report) -> list[Finding]:
+    """レビューできなかった Finding (未レビュー・失敗・判定不能). 抑制済みは除く."""
+    return [
+        finding
+        for finding in report.findings
+        if finding.suppressed is None and finding.status in _UNRESOLVED
+    ]
+
+
 def has_problems(report: Report) -> bool:
-    """サマリで「問題あり」として扱うか. 判定前の候補 (scan のみ) も含める."""
+    """サマリで「問題あり」として扱うか.
+
+    判定前の候補 (scan のみ) と、レビューできなかった候補も含める。
+    全 Reviewer が失敗した run を「問題なし」と同じ扱いにしない (§7.2)。
+    """
     if report.findings:
-        return bool(visible_findings(report))
+        return bool(visible_findings(report) or unresolved_findings(report))
     return bool(report.candidates)
 
 
@@ -111,7 +131,9 @@ def render_summary(report: Report, *, report_url: str | None = None) -> str:
 
     if report.findings:
         shown = visible_findings(report)
-        if not shown:
+        if not shown and unresolved_findings(report):
+            lines += ["⚠️ レビューできなかった候補があります。「問題なし」ではありません。", ""]
+        elif not shown:
             lines += ["✅ 問題は検出されませんでした。", ""]
         ordered = sorted(shown, key=lambda f: (_SUMMARY_ORDER.index(f.status), -f.severity.order))
         for finding in ordered[:MAX_SUMMARY_FINDINGS]:
@@ -125,9 +147,29 @@ def render_summary(report: Report, *, report_url: str | None = None) -> str:
 
     lines += ["---", _footer(report, report_url)]
     body = "\n".join(lines).rstrip() + "\n"
-    if len(body) > MAX_BODY_CHARS:
-        body = body[:MAX_BODY_CHARS] + "\n\n_(長すぎるため省略しました。full report を参照)_\n"
-    return body
+    return _fit_body(body, footer=lines[-1])
+
+
+_OMITTED = "_(長すぎるため省略しました。full report を参照)_"
+
+
+def _fit_body(body: str, *, footer: str) -> str:
+    """上限に収める. Finding のブロック (`---` 区切り) の境目で切り、フッタは残す.
+
+    文字数で機械的に切ると、コードフェンスや `<details>` の途中で切れて以降の表示が壊れる。
+    """
+    if len(body) <= MAX_BODY_CHARS:
+        return body
+    tail = f"\n---\n{_OMITTED}\n\n---\n{footer}\n"
+    budget = MAX_BODY_CHARS - len(tail)
+    cut = body.rfind("\n---\n", 0, budget)
+    if cut <= 0:
+        # ブロック 1 つで上限を超える. 行の境目で切り、開いたままのフェンスは閉じない形で捨てる
+        cut = body.rfind("\n", 0, budget)
+        head = body[: max(cut, 0)]
+        head = "\n".join(line for line in head.splitlines() if not line.startswith("```"))
+        return head + tail
+    return body[:cut] + tail
 
 
 def _counts_line(report: Report) -> list[str]:
@@ -140,7 +182,7 @@ def _counts_line(report: Report) -> list[str]:
         f"**{counts.get('confirmed', 0)} confirmed**",
         f"{counts.get('likely', 0)} likely",
         f"**{counts.get('review_required', 0)} review required**",
-        f"{counts.get('false_positive', 0)} false positive (suppressed)",
+        f"{counts.get('false_positive', 0)} false positive (PR には非表示)",
     ]
     lines = [" · ".join(parts)]
     for status, label in (
@@ -150,7 +192,7 @@ def _counts_line(report: Report) -> list[str]:
     ):
         if counts.get(status.value):
             lines.append(f"⚠️ {label} {counts[status.value]} 件 (「問題なし」ではありません)")
-    reviewers = ", ".join(f"`{run.name}`" for run in report.reviewers)
+    reviewers = ", ".join(md.code_span(run.name) for run in report.reviewers)
     strategy = next(
         (f.aggregation.strategy for f in report.findings if f.aggregation is not None), None
     )
@@ -166,12 +208,16 @@ def _counts_line(report: Report) -> list[str]:
 
 
 def _scanner_warnings(report: Report) -> list[str]:
-    """壊れた事実を隠さない (§7.2)."""
-    return [
-        f"⚠️ `{run.scanner}` が失敗したため、この観点の検査は行われていません。"
-        for run in report.scanners
-        if run.status is ScanStatus.FAILED
-    ]
+    """壊れた事実・検査していない観点を隠さない (§7.2: skipped と failed を混ぜない)."""
+    lines: list[str] = []
+    for run in report.scanners:
+        name = md.code_span(run.scanner)
+        if run.status is ScanStatus.FAILED:
+            lines.append(f"⚠️ {name} が失敗したため、この観点の検査は行われていません。")
+        elif run.status is ScanStatus.SKIPPED:
+            reason = f" ({_one_line(run.reason, 120)})" if run.reason else ""
+            lines.append(f"ℹ️ {name} はスキップされました{reason}。この観点は検査していません。")
+    return lines
 
 
 def _summary_block(finding: Finding) -> list[str]:
@@ -194,7 +240,7 @@ def _summary_block(finding: Finding) -> list[str]:
                 else f"脆弱でない ({verdict.confidence:.2f})"
             )
             lines.append(
-                f"- `{verdict.reviewer}`: {judgement} — 「{_one_line(verdict.reasoning, 160)}」"
+                f"- {md.code_span(verdict.reviewer)}: {judgement} — 「{_one_line(verdict.reasoning, 160)}」"
             )
         return [*lines, ""]
 
@@ -231,15 +277,20 @@ def _summary_block(finding: Finding) -> list[str]:
         ]
         for verdict in finding.verdicts:
             if verdict.status.value != "ok":
-                lines.append(f"| `{verdict.reviewer}` | ⚠️ {verdict.status.value} | | | |")
+                lines.append(f"| {_cell(verdict.reviewer)} | ⚠️ {verdict.status.value} | | | |")
                 continue
             lines.append(
-                f"| `{verdict.reviewer}` | {'✅' if verdict.vulnerable else '—'} | "
+                f"| {_cell(verdict.reviewer)} | {'✅' if verdict.vulnerable else '—'} | "
                 f"{verdict.severity.value} | {verdict.confidence:.2f} | "
                 f"{verdict.false_positive_probability:.2f} |"
             )
         lines += ["</details>", ""]
     return lines
+
+
+def _cell(value: str) -> str:
+    """表のセルに置くコードスパン. `|` で列が崩れないようにする (GFM は `\\|` を許す)."""
+    return md.code_span(value).replace("|", "\\|")
 
 
 def _candidate_table(report: Report) -> list[str]:
@@ -252,7 +303,7 @@ def _candidate_table(report: Report) -> list[str]:
     for candidate in report.candidates[:MAX_SUMMARY_FINDINGS]:
         severity = candidate.severity_reported or Severity.INFO
         lines.append(
-            f"| {SEVERITY_MARK[severity]} {severity.value} | `{candidate.scanner}` | "
+            f"| {SEVERITY_MARK[severity]} {severity.value} | {_cell(candidate.scanner)} | "
             f"{_one_line(candidate.title, 80).replace('|', '/')} | "
             f"{md.code_span(candidate.where)} |"
         )

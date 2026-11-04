@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from security_checker.config.schema import Config
 from security_checker.context.builder import ContextBuilder
+from security_checker.context.slicer import resolve_inside
 from security_checker.context.facts import collect_repo_facts
 from security_checker.errors import ConfigError
 from security_checker.eval.dataset import Dataset, EvalCase
@@ -63,7 +64,10 @@ def _prepare(dataset: Dataset, config: Config, workspace: Path, setup: ReviewerS
     prepared = _Prepared()
     for case in dataset.cases:
         root = workspace / case.id
-        target = root / case.candidate.path
+        target = resolve_inside(root, case.candidate.path)
+        if root.resolve().parent != workspace.resolve() or target is None:
+            # dataset の検証を通ったうえでの多重の防御. リンクなどで外に出るなら書かない
+            raise ConfigError(f"評価ケース {case.id} の書き出し先がワークスペースの外です")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(case.code, encoding="utf-8")
 

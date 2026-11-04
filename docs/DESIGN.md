@@ -1878,7 +1878,7 @@ HTML コメントのマーカー `<!-- security-checker:summary:v2 -->` で自�
 <!-- security-checker:summary:v2 -->
 ## 🛡 AI Security Review
 
-**1 confirmed** · 0 likely · **1 review required** · 10 false positive (suppressed)
+**1 confirmed** · 0 likely · **1 review required** · 10 false positive (PR には非表示)
 Reviewers: `alpha`, `beta` · Aggregation: consensus (2 of 2)
 ⚠️ trivy が失敗したため、設定ファイルの検査は行われていません。
 

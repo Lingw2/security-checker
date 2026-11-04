@@ -9,14 +9,19 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+import re
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from security_checker.errors import ConfigError
 from security_checker.models.candidate import Candidate, Location
 from security_checker.models.enums import Category, Severity
+
+
+#: ケースの id はワークスペースのディレクトリ名になる。区切り文字や `..` を通さない
+_CASE_ID = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 class GroundTruth(BaseModel):
@@ -46,6 +51,22 @@ class CaseCandidate(BaseModel):
     severity_reported: Severity | None = None
     cwe: list[str] = Field(default_factory=list)
 
+    @field_validator("path")
+    @classmethod
+    def _path_stays_inside(cls, value: str) -> str:
+        """一時ワークスペースの外に書き出させない (配布されたデータセットを回す前提)."""
+        windows = PureWindowsPath(value)
+        if (
+            not value
+            or PurePosixPath(value).is_absolute()
+            or windows.is_absolute()
+            or windows.drive
+        ):
+            raise ValueError(f"path は相対パスである必要があります: {value!r}")
+        if ".." in PurePosixPath(value).parts or ".." in windows.parts:
+            raise ValueError(f"path に .. は使えません: {value!r}")
+        return value
+
 
 class EvalCase(BaseModel):
     """1 件の評価ケース."""
@@ -59,6 +80,13 @@ class EvalCase(BaseModel):
     #: 文脈込みの実コード. ContextBuilder に通すため、一時ディレクトリに書き出して使う
     code: str
     ground_truth: GroundTruth
+
+    @field_validator("id")
+    @classmethod
+    def _id_is_a_plain_name(cls, value: str) -> str:
+        if not _CASE_ID.fullmatch(value) or value in {".", ".."}:
+            raise ValueError(f"id は英数字と . _ - だけで書いてください: {value!r}")
+        return value
 
     def to_candidate(self) -> Candidate:
         """実行時と同じ Candidate に変換する (評価専用の経路を作らない)."""

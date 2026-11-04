@@ -565,3 +565,73 @@ def test_without_a_supporting_verdict_no_reason_is_shown():
     finding = make_finding(candidate, FindingStatus.REVIEW_REQUIRED, verdicts=[verdict])
     assert finding.supporting_reasoning == ""
     assert "到達しません" not in render_inline(finding)
+
+
+# --- レビューできなかった run を「問題なし」にしない (#597) ------------------------
+
+
+@pytest.mark.parametrize(
+    "status", [FindingStatus.ERROR, FindingStatus.NOT_REVIEWED, FindingStatus.INCONCLUSIVE]
+)
+def test_a_run_where_no_candidate_could_be_reviewed_is_still_posted(status):
+    candidate = make_candidate()
+    report = make_report([candidate], [make_finding(candidate, status, verdicts=[])])
+    fake = FakeGithub()
+    with fake.client() as client:
+        result = post_comments(client, PR, report, GithubConfig())
+    assert result.summary_action == "created"
+    body = render_summary(report)
+    assert "✅" not in body
+    assert "レビューできなかった候補があります" in body
+
+
+# --- 表示の崩れ・紛らわしさ (#598, #599, #600, #601) ------------------------------
+
+
+def test_skipped_scanners_are_named_in_the_summary():
+    runs = [
+        ScannerRun(scanner="trivy", category="config", status=ScanStatus.SKIPPED, reason="未導入")
+    ]
+    body = render_summary(make_report([], scanners=runs))
+    assert "`trivy` はスキップされました (未導入)" in body
+
+
+def test_reviewer_names_go_through_code_span():
+    candidate = make_candidate()
+    finding = make_finding(
+        candidate, FindingStatus.CONFIRMED, verdicts=[make_verdict("a`b|c", candidate.id)]
+    )
+    body = render_summary(make_report([candidate], [finding]))
+    assert "a`b" not in body
+    assert "`a'b\\|c`" in body
+
+
+def test_false_positive_count_is_not_called_suppressed():
+    candidate = make_candidate()
+    report = make_report([candidate], [make_finding(candidate, FindingStatus.FALSE_POSITIVE)])
+    body = render_summary(report)
+    assert "(suppressed)" not in body
+    assert "1 false positive (PR には非表示)" in body
+
+
+def test_a_long_summary_is_cut_between_findings_and_keeps_the_footer(monkeypatch):
+    candidates = [make_candidate(f"c{i}", path=f"f{i}.py") for i in range(15)]
+    findings = [
+        make_finding(
+            c,
+            FindingStatus.CONFIRMED,
+            summary="x",
+            verdicts=[make_verdict("r1", c.id, reasoning="y" * 1400)],
+        )
+        for c in candidates
+    ]
+    report = make_report(candidates, findings)
+    from security_checker.github import comment as module
+
+    full = render_summary(report)
+    monkeypatch.setattr(module, "MAX_BODY_CHARS", 4_000)
+    body = render_summary(report)
+    assert len(body) <= 4_000
+    assert "長すぎるため省略しました" in body
+    assert body.count("<details>") == body.count("</details>")
+    assert body.rstrip().endswith(full.rstrip().splitlines()[-1])
