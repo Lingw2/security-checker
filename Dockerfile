@@ -6,7 +6,8 @@
 #
 # GHCR への公開 (ghcr.io/sh1n1230/security-checker) は P6 で行う。
 # それまでの GitHub Action は composite (action.yml) で配る。
-FROM python:3.12-slim AS base
+# digest で固定する (タグは差し替えられうる)。更新は dependabot (docker) が digest ごと提案する
+FROM python:3.12-slim@sha256:b18b261e1b4974b4f321451ad5251ded85abb22c2b8b262da527dda1d031ab30 AS base
 
 # スキャナの版。空なら scripts/scanner-versions.sh に固定した版 (sha256 も固定) を入れる。
 # `--build-arg GITLEAKS_VERSION=x.y.z` などで上書きした場合は、リリース側のチェックサムで検証する
@@ -40,8 +41,11 @@ RUN set -eux; \
     security-checker version
 
 # マウントしたリポジトリの所有者が実行ユーザーと異なっても git が拒否しないようにする。
-# `docker run -u` で任意の uid にしても効くよう、system 設定に書く
-RUN git config --system --add safe.directory '*'
+# `docker run -u` で任意の uid にしても効くよう、system 設定に書く。
+# '*' にするとどのディレクトリでも所有者チェックが外れるため、文書化したマウント先 (/src) に限る。
+# 別の場所にマウントするなら `-e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory
+# -e GIT_CONFIG_VALUE_0=<path>` で足す
+RUN git config --system --add safe.directory /src
 
 # 実行時は root で動かさない。マウントしたリポジトリを読み、レポートを書くだけ
 RUN useradd --create-home --uid 10001 checker

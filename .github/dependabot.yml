@@ -2,6 +2,9 @@
 version: 2
 # 公開から 7 日未満の版は提案させない。乗っ取られたリリースは数日以内に見つかって取り下げられることが多い
 # (scripts/scanner-versions.sh の「7 日以上経った版を選ぶ」と同じ考え方)。セキュリティ更新は対象外
+#
+# labels は指定しない。指定したラベルはリポジトリに存在しないと付かないが、既定のラベル
+# (dependencies と ecosystem 名) は Dependabot が無ければ作って付ける
 
 updates:
   # GitHub Actions は SHA で固定しているため、人手では更新が漏れる。
@@ -14,7 +17,6 @@ updates:
       default-days: 7
     commit-message:
       prefix: "chore(deps)"
-    labels: [dependencies]
 
   - package-ecosystem: uv
     directory: /
@@ -24,7 +26,6 @@ updates:
       default-days: 7
     commit-message:
       prefix: "chore(deps)"
-    labels: [dependencies]
     # semgrep の依存一覧は semgrep の版から作り直す一式 (ファイル先頭の手順)。1 つずつ上げると
     # semgrep が検証していない組み合わせになるため、ここでは更新しない
     exclude-paths:
@@ -43,4 +44,3 @@ updates:
       default-days: 7
     commit-message:
       prefix: "chore(deps)"
-    labels: [dependencies]
