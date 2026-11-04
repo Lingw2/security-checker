@@ -382,14 +382,109 @@ def test_comment_disabled_by_config():
     assert fake.calls == []
 
 
-def test_read_only_token_is_a_warning_not_a_crash():
-    """fork PR の GITHUB_TOKEN は read-only. それはツールの故障ではない (§21.2)."""
+def test_read_only_token_is_a_warning_when_allowed():
+    """fork PR の GITHUB_TOKEN は read-only. 分かっている呼び出し元は警告に落とせる (§21.2)."""
     fake = FakeGithub()
     fake.fail_writes_with = 403
     with fake.client() as client:
-        result = post_comments(client, PR, confirmed_report(), GithubConfig())
+        result = post_comments(client, PR, confirmed_report(), GithubConfig(), allow_readonly=True)
     assert result.summary_action == "none"
     assert any("workflow_run" in w for w in result.warnings)
+
+
+@pytest.mark.parametrize("status", [403, 404])
+def test_forbidden_or_missing_pr_is_an_error_by_default(status):
+    """pull-requests: write の付け忘れや PR 番号の誤りを緑にしない (#240)."""
+    fake = FakeGithub()
+    fake.fail_writes_with = status
+    with fake.client() as client, pytest.raises(GithubError, match="pull-requests: write"):
+        post_comments(client, PR, confirmed_report(), GithubConfig())
+
+
+def test_secondary_rate_limit_is_retried_once_after_a_short_wait():
+    """二次レート制限の 403 を権限不足として扱わない (#604)."""
+    slept: list[float] = []
+    attempts = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json=[])
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            return httpx.Response(
+                403,
+                headers={"retry-after": "2"},
+                json={"message": "You have exceeded a secondary rate limit"},
+            )
+        return httpx.Response(201, json={"id": 1, "html_url": "https://gh/c/1"})
+
+    client = GithubClient("t", transport=httpx.MockTransport(handler), sleep=slept.append)
+    with client:
+        result = post_comments(client, PR, confirmed_report(), GithubConfig(inline_comments=False))
+    assert result.summary_action == "created"
+    assert slept == [2.0]
+
+
+def test_a_long_rate_limit_is_reported_as_rate_limited_even_when_readonly_is_allowed():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json=[])
+        return httpx.Response(403, json={"message": "API rate limit exceeded"})
+
+    client = GithubClient("t", transport=httpx.MockTransport(handler), sleep=lambda _: None)
+    with client, pytest.raises(GithubError, match="レート制限") as info:
+        post_comments(client, PR, confirmed_report(), GithubConfig(), allow_readonly=True)
+    assert info.value.rate_limited
+
+
+def test_one_rejected_inline_comment_does_not_drop_the_others():
+    """review 全体が 422 になったら 1 件ずつ送り直し、弾かれたものだけ数える (#605)."""
+    fake = FakeGithub()
+    fake.files = [
+        {"filename": "a.py", "patch": "@@ -0,0 +1,50 @@\n+a"},
+        {"filename": "b.py", "patch": "@@ -0,0 +1,50 @@\n+a"},
+    ]
+    original = fake.handler
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/reviews"):
+            body = json.loads(request.content)
+            if any(c["path"] == "b.py" for c in body["comments"]):
+                return httpx.Response(422, json={"message": "Line could not be resolved"})
+        return original(request)
+
+    first = make_candidate("c1", path="a.py", line=3)
+    second = make_candidate("c2", path="b.py", line=3)
+    report = make_report(
+        [first, second],
+        [
+            make_finding(first, FindingStatus.CONFIRMED),
+            make_finding(second, FindingStatus.CONFIRMED),
+        ],
+    )
+    client = GithubClient("t", transport=httpx.MockTransport(handler))
+    with client:
+        result = post_comments(client, PR, report, GithubConfig())
+    assert result.inline_posted == 1
+    assert result.inline_rejected == 1
+    assert any("422" in w for w in result.warnings)
+
+
+def test_truncated_pagination_is_reported(monkeypatch):
+    """上限ページを超えた一覧を黙って切り捨てない (#602)."""
+    monkeypatch.setattr("security_checker.github.client.MAX_PAGES", 1)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(
+                200, json=[], headers={"link": '<https://api.github.com/next?page=2>; rel="next"'}
+            )
+        return httpx.Response(201, json={"id": 1, "html_url": "https://gh/c/1"})
+
+    client = GithubClient("t", transport=httpx.MockTransport(handler))
+    with client:
+        result = post_comments(client, PR, confirmed_report(), GithubConfig(inline_comments=False))
+    assert any("ページを超えた" in w for w in result.warnings)
 
 
 def test_server_errors_are_raised():

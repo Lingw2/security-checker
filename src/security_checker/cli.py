@@ -948,6 +948,13 @@ def comment(
         bool | None,
         typer.Option("--inline/--no-inline", help="inline コメントを付けるか (既定: 設定に従う)"),
     ] = None,
+    allow_readonly: Annotated[
+        bool,
+        typer.Option(
+            "--allow-readonly",
+            help="権限不足 (403 / 404) を exit 3 ではなく警告にする (fork PR など)",
+        ),
+    ] = False,
 ) -> None:
     """report.json を PR にコメントする (sticky サマリ + inline, 設計書 §21.3).
 
@@ -975,19 +982,31 @@ def comment(
         context = context_from_env(repository=repo, number=pr, head_sha=sha)
         api_url = os.environ.get("GITHUB_API_URL") or DEFAULT_API_URL
         with GithubClient(token, api_url=api_url) as client:
-            result = post_comments(client, context, report, settings, report_url=report_url)
+            result = post_comments(
+                client,
+                context,
+                report,
+                settings,
+                report_url=report_url,
+                allow_readonly=allow_readonly,
+            )
     except SecurityCheckerError as exc:
         _fail(str(exc), exc.exit_code)
 
     console = _console()
     _print_warnings(err_console, list(result.warnings))
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        # ログを開かなくても Actions の画面に出るよう、注釈としても書く
+        for message in result.warnings:
+            print(f"::warning title=security-checker comment::{' '.join(message.split())}")
     console.print(
         f"summary: {result.summary_action}"
         + (f" ({result.summary_url})" if result.summary_url else "")
     )
     console.print(
         f"inline: 投稿 {result.inline_posted} / 投稿済み {result.inline_already_posted} / "
-        f"diff 外 {result.inline_outside_diff} / 上限超過 {result.inline_over_limit}"
+        f"diff 外 {result.inline_outside_diff} / 上限超過 {result.inline_over_limit} / "
+        f"拒否 {result.inline_rejected}"
     )
 
 

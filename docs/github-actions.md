@@ -127,6 +127,13 @@ security-checker review --full               # 全件
 GITHUB_TOKEN=... security-checker comment .security-checker/report.json --repo owner/name --pr 12
 ```
 
+- 権限不足 (403) と PR が見つからない (404) は **exit 3** です。`pull-requests: write` の付け忘れや
+  PR 番号の誤りを緑のまま見逃さないためです。投稿できないと分かっている場面では `--allow-readonly` で
+  警告に落とせます。
+- 二次レート制限は `Retry-After` が 60 秒以内なら 1 回だけ待って送り直し、それ以上ならレート制限として exit 3。
+- inline コメントのうち GitHub が 422 で受け付けないもの (行が diff に無いなど) は、それだけを数えて残りを投稿します。
+- 警告は GitHub Actions では `::warning::` の注釈としても出します。
+
 ## 5. fork からの PR
 
 `pull_request` イベントの fork PR では、
