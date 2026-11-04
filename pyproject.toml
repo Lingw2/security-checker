@@ -36,11 +36,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-openai = ["openai>=3.36.1"]
-google = ["google-genai"]
-anthropic = ["anthropic"]
+# LLM の SDK は extras にも置かない。内蔵アダプタは httpx だけで動き、SDK を使うコードは無い
+# (入れても何も変わらない extras は誤解を招く) (設計書 §4)
 tiktoken = ["tiktoken"]
-all = ["security-checker[openai,google,anthropic,tiktoken]"]
+# 外部のプラグイン作者向けの契約テスト (security_checker.testing) に要る
+testing = ["pytest>=8", "pytest-asyncio>=0.24"]
+all = ["security-checker[tiktoken,testing]"]
 
 [project.scripts]
 security-checker = "security_checker.cli:main"

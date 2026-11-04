@@ -152,3 +152,17 @@ def test_installer_refuses_non_linux(tmp_path, monkeypatch):
     )
     assert completed.returncode == 2
     assert "Linux 専用" in completed.stderr
+
+
+def test_uv_lock_has_the_same_version_as_pyproject():
+    """リリース PR で pyproject.toml だけが上がり、uv sync --locked が落ちるのを防ぐ (#244)."""
+    import json
+    import tomllib
+
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
+    locked = next(p for p in lock["package"] if p["name"] == project["name"])
+    assert locked["version"] == project["version"]
+    config = json.loads((ROOT / "release-please-config.json").read_text(encoding="utf-8"))
+    extra = config["packages"]["."]["extra-files"]
+    assert any(item["path"] == "uv.lock" for item in extra)

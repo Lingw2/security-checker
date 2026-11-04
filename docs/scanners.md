@@ -88,7 +88,7 @@ v2 は `skipped` と `failed` を型で分け、どちらもレポートの冒�
 ## 自作のスキャナを足す
 
 `security_checker.scanners` の entry point に登録すると、内蔵と同じように使えます。
-適合性は公開の契約テストで確かめられます。
+適合性は公開の契約テストで確かめられます (`pip install "security-checker[testing]"` で pytest も入ります)。
 
 ```python
 from security_checker.testing import ScannerContractTests

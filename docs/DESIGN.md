@@ -196,13 +196,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# 公式 SDK は「入っていればバックエンドに使う」だけ。内蔵アダプタはどれも SDK なしで動く
-# (ここに現れるパッケージ名は PyPI 上の実名であり、優遇を意味しない)
-openai    = ["openai>=1.40"]
-google    = ["google-genai"]
-anthropic = ["anthropic"]
-tiktoken  = ["tiktoken"]          # トークン見積りの精度向上
-all       = ["security-checker[openai,google,anthropic,tiktoken]"]
+# LLM の SDK は extras にも置かない (使うコードが無いため。2026-11 に整理)
+tiktoken  = ["tiktoken"]                          # トークン見積りの精度向上
+testing   = ["pytest>=8", "pytest-asyncio>=0.24"] # プラグイン作者向けの契約テスト
+all       = ["security-checker[tiktoken,testing]"]
 ```
 
 **内蔵アダプタ(`http` transport の 4 方言 + `process` transport)はすべて
@@ -214,7 +211,8 @@ SDK をコア依存にすると、3 社分の SDK が相互に依存バージョ
 `pip install` が壊れるという、この種のツールで最も多い故障モードを抱え込むことになる。
 
 つまり **`pip install security-checker` だけで、LLM SDK を 1 つも入れずに全 Provider が使える。**
-公式 SDK は「入っていればそちらをバックエンドに使う」オプション扱いに留める。
+SDK をバックエンドに使う経路は持たない (当初は「入っていれば使う」オプションとしていたが、
+使うコードが無いまま extras だけが残っていたため外した)。
 
 ### ツールチェーン
 
