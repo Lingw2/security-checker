@@ -327,3 +327,31 @@ def test_local_ollama_reviewers_cost_zero_and_unpriced_ones_are_warned():
     assert remote.price is None
     assert any("'remote'" in w and "budget.max_usd" in w for w in setup.warnings)
     assert not any("'local'" in w for w in setup.warnings)
+
+
+async def test_trace_keeps_only_a_hash_of_the_response_by_default():
+    """応答はコードを引用しうる. save_prompts: false では全文を残さない (#447)."""
+    provider = ScriptedProvider([verdict_payload()])
+    outcome = await Reviewer("r1", provider).review(make_task())
+    assert outcome.trace is not None
+    assert outcome.trace["response"]["raw"] is None
+    assert outcome.trace["response"]["raw_sha256"]
+    saved = await Reviewer("r1", ScriptedProvider([verdict_payload()]), save_prompts=True).review(
+        make_task()
+    )
+    assert saved.trace is not None
+    assert saved.trace["response"]["raw"]
+
+
+def test_pricing_must_be_a_mapping_with_non_negative_prices(tmp_path):
+    """リストのトップレベル (#452) と負の単価 (#453) を設定エラーにする."""
+    from security_checker.errors import ConfigError
+    from security_checker.observability.cost import load_price_table
+
+    path = tmp_path / "pricing.yml"
+    path.write_text("- a\n- b\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="マッピング"):
+        load_price_table(explicit=path)
+    path.write_text("models:\n  m:\n    input_per_1m: -1\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="不正"):
+        load_price_table(explicit=path)

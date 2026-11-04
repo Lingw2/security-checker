@@ -53,13 +53,12 @@ gitleaks が検出した秘密の値をそのまま外部 LLM に送るのは、
 - 既定では**プロンプト全文を保存せず、SHA-256 ハッシュのみ**を残す。コードが平文でディスクに残るのを避けるため。
 - `output.save_prompts: true` にすると全文を保存する。この場合は起動時に警告を出す。
   出力ディレクトリを `.gitignore` に入れること。
-- **LLM の応答は既定でも全文を保存する** (`calls/*.json` の `response.raw`)。`explain` で判定の根拠を
-  後から確かめるためだが、応答は evidence や reasoning でレビュー対象のコードを引用するので、
-  **プロンプトを保存しなくてもコードの断片はディスクに残る**。シークレットの既知形式はマスキングを通すが、
-  それ以外のコードは平文のまま。
-- そのため `.security-checker/` を CI の artifact として上げるときは、閲覧できる人の範囲が
+- **LLM の応答も既定では全文を保存せず**、SHA-256 ハッシュと文字数だけを残す (`calls/*.json` の
+  `response.raw_sha256` / `raw_chars`)。応答は evidence や reasoning でレビュー対象のコードを引用するため。
+  判定の内容 (パース済みの Verdict) は report.json に残る。`output.save_prompts: true` のときは応答の全文
+  (`response.raw`) も保存する。
+- 全文を保存した `.security-checker/` を CI の artifact として上げるときは、閲覧できる人の範囲が
   リポジトリのコードを読める人と同じであることを確かめる (公開リポジトリの artifact は誰でも取得できる)。
-  非公開コードのトレースを公開の場所に上げない。
 
 ## 5. プロンプトインジェクション
 

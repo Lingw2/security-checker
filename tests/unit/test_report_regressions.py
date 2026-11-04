@@ -139,3 +139,17 @@ async def test_report_does_not_carry_absolute_paths(tmp_path):
     dumped = outcome.report.model_dump_json()
     assert str(tmp_path) not in dumped
     assert outcome.report.target.root == tmp_path.name
+
+
+def test_markdown_names_go_through_code_span():
+    """Reviewer 名・scanner・rule_id のバッククォートで表やコードスパンを壊させない (#266)."""
+    from tests.factories import make_verdict
+
+    candidate = make_candidate("c1", scanner="sem`grep", rule_id="r`|x")
+    finding = make_finding(
+        candidate, FindingStatus.CONFIRMED, verdicts=[make_verdict("a`b|c", candidate.id)]
+    )
+    body = render_markdown(make_report([candidate], [finding]), OK)
+    assert "a`b" not in body
+    assert "sem`grep" not in body
+    assert "r`|x" not in body

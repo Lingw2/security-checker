@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from security_checker.errors import ConfigError
 from security_checker.models.verdict import Usage
@@ -23,8 +23,9 @@ class ModelPrice(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    input_per_1m: float = 0.0
-    output_per_1m: float = 0.0
+    # 負の単価は予算の判定を壊す (支出が減って見える) ので受け付けない (#453)
+    input_per_1m: float = Field(default=0.0, ge=0.0)
+    output_per_1m: float = Field(default=0.0, ge=0.0)
 
     def estimate(self, usage: Usage) -> float:
         return (
@@ -68,6 +69,11 @@ def load_price_table(config_dir: Path | None = None, explicit: Path | None = Non
             raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         except (OSError, yaml.YAMLError) as exc:
             raise ConfigError(f"{path} を読み込めません: {exc}") from exc
+        if not isinstance(raw, dict):
+            # リストなどは AttributeError で落ちていた (#452)
+            raise ConfigError(
+                f"{path}: トップレベルはマッピング (models: ...) である必要があります"
+            )
         entries = raw.get("models", raw)
         if not isinstance(entries, dict):
             raise ConfigError(f"{path}: models はマッピングである必要があります")

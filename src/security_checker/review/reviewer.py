@@ -307,8 +307,12 @@ class Reviewer:
             "structured_mode": self.provider.capabilities.structured_output.value,
             "language": self.language,
         }
+        # 応答はコードを引用しうる. 既定では全文を残さず、ハッシュと長さだけにする (#447)
+        raw = response.text if response is not None else None
         response_trace: dict[str, Any] = {
-            "raw": response.text if response is not None else None,
+            "raw": raw if self.save_prompts else None,
+            "raw_sha256": sha256_text(raw) if raw is not None else None,
+            "raw_chars": len(raw) if raw is not None else None,
             "finish_reason": response.finish_reason if response is not None else None,
             "error": error,
         }

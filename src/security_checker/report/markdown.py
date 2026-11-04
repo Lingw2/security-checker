@@ -131,7 +131,7 @@ def _summary(report: Report) -> list[str]:
 
     if report.reviewers:
         reviewers = " / ".join(
-            f"`{run.name}` ({run.transport}, {run.calls} 回"
+            f"{md.code_span(run.name)} ({run.transport}, {run.calls} 回"
             + (f", 失敗 {run.verdicts_error}" if run.verdicts_error else "")
             + ")"
             for run in report.reviewers
@@ -216,7 +216,7 @@ def _finding_block(finding: Finding) -> list[str]:
     if finding.cwe:
         meta.insert(0, "**CWE** " + ", ".join(finding.cwe[:3]))
     lines += [" ・ ".join(meta), ""]
-    lines += [f"検出元: `{candidate.scanner}` / `{candidate.rule_id}`", ""]
+    lines += [f"検出元: {md.code_span(candidate.scanner)} / {md.code_span(candidate.rule_id)}", ""]
 
     if candidate.redacted:
         lines += [f"> {REDACTED_NOTE}", ""]
@@ -230,7 +230,7 @@ def _finding_block(finding: Finding) -> list[str]:
         lines += ["| Reviewer | 判定 | 確信度 |", "|---|---|---|"]
         for verdict in ok_verdicts:
             judgement = f"{verdict.severity.value}" if verdict.vulnerable else "脆弱ではない"
-            lines.append(f"| `{verdict.reviewer}` | {judgement} | {verdict.confidence:.0%} |")
+            lines.append(f"| {_cell(verdict.reviewer)} | {judgement} | {verdict.confidence:.0%} |")
         lines.append("")
 
     for verdict in ok_verdicts:
@@ -252,12 +252,14 @@ def _finding_block(finding: Finding) -> list[str]:
     if details:
         lines += ["<details><summary>各 Reviewer の判断理由</summary>", ""]
         for verdict in details:
-            lines += [f"**`{verdict.reviewer}`** — {md.text(verdict.reasoning.strip())}", ""]
+            reviewer = md.code_span(verdict.reviewer)
+            lines += [f"**{reviewer}** — {md.text(verdict.reasoning.strip())}", ""]
         lines += ["</details>", ""]
 
     failed = [v for v in finding.verdicts if v.status.value != "ok"]
     for verdict in failed:
-        lines += [f"> ⚠️ `{verdict.reviewer}` は判定できませんでした: {verdict.status.value}", ""]
+        reviewer = md.code_span(verdict.reviewer)
+        lines += [f"> ⚠️ {reviewer} は判定できませんでした: {verdict.status.value}", ""]
     return lines
 
 
@@ -274,7 +276,7 @@ def _candidates(report: Report) -> list[str]:
     for candidate in report.candidates[:MAX_CANDIDATE_ROWS]:
         severity = candidate.severity_reported or Severity.INFO
         lines.append(
-            f"| {SEVERITY_MARK[severity]} {severity.value} | `{candidate.scanner}` | "
+            f"| {SEVERITY_MARK[severity]} {severity.value} | {_cell(candidate.scanner)} | "
             f"{_flatten(candidate.title)}{' 🔒' if candidate.redacted else ''} | "
             f"{md.code_span(candidate.where)} |"
         )
@@ -299,6 +301,11 @@ def _footer(report: Report) -> list[str]:
     if report.trace_dir:
         lines += ["", f"監査証跡: `{report.trace_dir}`"]
     return lines
+
+
+def _cell(value: str) -> str:
+    """表のセルに置くコードスパン. 名前のバッククォートや | で表を壊させない (#266)."""
+    return md.code_span(value).replace("|", "\\|")
 
 
 def _flatten(text: str) -> str:

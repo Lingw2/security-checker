@@ -127,7 +127,7 @@
 | `output.dir` | `.security-checker/` | |
 | `output.formats` | `[terminal, json, markdown]` | `sarif` を足すと `report.sarif`。CLI の `-f` で置き換え |
 | `output.language` | `auto` | LLM に書かせる本文の言語 |
-| `output.save_prompts` | `false` | プロンプト全文をトレースに保存する (警告が出る) |
+| `output.save_prompts` | `false` | プロンプトと LLM の応答の全文をトレースに保存する (警告が出る)。既定はハッシュと長さだけ |
 | `github.comment` / `comment_mode` | `true` / `sticky` | `security-checker comment` の挙動 |
 | `github.inline_comments` / `inline_min_status` / `max_inline_comments` | `true` / `likely` / `20` | |
 | `github.comment_on_clean` | `false` | 指摘ゼロで既存コメントが無いときも投稿するか |
