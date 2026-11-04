@@ -204,7 +204,7 @@ def test_init_local_warns_when_git_does_not_ignore_it(tmp_path):
 def test_windows_command_keeps_backslashes(monkeypatch):
     from security_checker import cli
 
-    monkeypatch.setattr(cli.os, "name", "nt")
+    monkeypatch.setattr("security_checker.cli.os.name", "nt")
     assert cli._split_command('"C:\\Program Files\\x\\cmd.exe" --flag') == [
         "C:\\Program Files\\x\\cmd.exe",
         "--flag",
