@@ -210,6 +210,13 @@ def mask_sensitive_values(text: str) -> str:
     masked = _PEM_BODY_RE.sub(_mask_pem_body, text)
     masked = redact_known_patterns(masked)
     masked = _JWT_RE.sub(lambda m: mask_secret(m.group(0)), masked)
+    # 引用符で囲んだ値は記号を含んでも終わりの引用符まで伏せる (`password = "p@ss!w0rd#"`)
+    masked = _SENSITIVE_QUOTED_RE.sub(
+        lambda m: (
+            m.group("key") + m.group("quote") + mask_secret(m.group("value")) + m.group("quote")
+        ),
+        masked,
+    )
     return _SENSITIVE_ASSIGNMENT_RE.sub(
         lambda m: m.group("key") + m.group("quote") + mask_secret(m.group("value")), masked
     )
@@ -237,6 +244,12 @@ _SENSITIVE_ASSIGNMENT_RE = re.compile(
     r"|client[_-]?secret|credential)"
     r"[A-Za-z0-9_.-]*[\"']?\s*[:=]\s*)"
     r"(?P<quote>[\"']?)(?P<value>[A-Za-z0-9+/=_~-]{8,})(?=[\s\"',;#}\]]|$)",
+    re.IGNORECASE,
+)
+_SENSITIVE_QUOTED_RE = re.compile(
+    _SENSITIVE_ASSIGNMENT_RE.pattern.split("(?P<quote>")[0]
+    + r"(?P<quote>[\"'])(?P<value>(?:(?!(?P=quote))[^\s\\])(?:(?!(?P=quote))[^\n\\]){6,}"
+    r"(?:(?!(?P=quote))[^\s\\]))(?P=quote)",
     re.IGNORECASE,
 )
 # 検出行で伏せるトークン。数字を含む 16 文字以上に限り、`SERVICE_CREDENTIALS` のような

@@ -475,7 +475,7 @@ def build_tasks(
     builder = ContextBuilder(
         root,
         config.context,
-        collect_repo_facts(root),
+        collect_repo_facts(root, config.target.exclude),
         max_input_tokens=smallest_input_limit(setup) if setup is not None else None,
     )
     return [builder.build(candidate) for candidate in selected], overflow

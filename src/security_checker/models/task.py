@@ -53,6 +53,8 @@ class RepoFacts(BaseModel):
     has_auth_layer: bool | None = None
     is_public_repo: bool | None = None
     deployment_hints: list[str] = Field(default_factory=list)
+    #: MAX_FILES で走査を打ち切った (事実は先頭の一部からしか集めていない)
+    truncated: bool = False
 
 
 class TokenBudget(BaseModel):
