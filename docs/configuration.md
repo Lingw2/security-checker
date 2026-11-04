@@ -19,6 +19,8 @@
   新しい名前は末尾に足します。手元で共有の Reviewer を止めるには `{name: team, enabled: false}` と書きます。
   他のリストは、ほかの層と同じく丸ごと置き換えます。
 - 環境変数は `SECURITY_CHECKER__POLICY__FAIL_ON=critical` の形 (`__` で階層を区切る)。
+  値は YAML として読みます (`true` は真偽値、`5` は数値)。ただし**文字列の項目には文字列のまま**渡すので、
+  `SECURITY_CHECKER__OUTPUT__LANGUAGE=no` は `no` (ノルウェー語) になり、数字だけのユーザー名も壊れません。
 - どの層で値が決まったかは `security-checker config show --explain` で見られます。
 - 未知のキーはエラーになります。打ち間違いを黙って無視しません。
 - **受け付けるが効かない設定は無い**ようにしています。方言に合わない項目
@@ -49,7 +51,7 @@
 | キー | 既定 | 説明 |
 |---|---|---|
 | `mode` | `auto` | `auto` (PR の文脈なら差分のみ) / `full` / `diff`。CLI の `--base` / `--full` で上書き |
-| `exclude` | vendor・node_modules など | 除外する glob。gitignore と同じ解釈 (`tests` はどの階層の tests にも一致、先頭か途中に `/` があればルート起点、一致したディレクトリの配下も除外)。全スキャナと `.security-checker-ignore` で共通。CLI の `--exclude` は**置き換え** (追加ではない) |
+| `exclude` | vendor・node_modules など | 除外する glob。gitignore と同じ解釈 (`tests` はどの階層の tests にも一致、先頭か途中に `/` があればルート起点、一致したディレクトリの配下も除外)。全スキャナと `.security-checker-ignore` で共通。設定ファイルに書いても CLI の `--exclude` でも既定の一覧を**置き換え** (追加ではない) ます。既定に足したいときは既定の項目も書き写してください。`**/.git/**` と `**/.security-checker/**` だけは常に除外します |
 
 ### scanners
 

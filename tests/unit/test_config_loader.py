@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
 
 from security_checker.config.loader import (
+    PRESET_DIR,
     LoadedConfig,
     available_presets,
     env_overrides,
@@ -273,3 +275,47 @@ def test_other_layers_still_replace_the_list(tmp_path):
         cli_overrides={"reviewers": [{"name": "b", "transport": "process", "command": ["y"]}]},
     )
     assert [r.name for r in loaded.config.reviewers] == ["b"]
+
+
+# --- 文字列の項目を YAML で壊さない (#204) ------------------------------------------
+
+
+def test_env_values_for_string_fields_stay_strings(tmp_path):
+    loaded = load_config(
+        tmp_path,
+        environ={
+            "SECURITY_CHECKER__OUTPUT__LANGUAGE": "no",
+            "SECURITY_CHECKER__GITHUB__COMMENT_AUTHOR": "12345",
+            "SECURITY_CHECKER__POLICY__STRICT": "false",
+            "SECURITY_CHECKER__BUDGET__MAX_USD": "2.5",
+        },
+    )
+    assert loaded.config.output.language == "no"
+    assert loaded.config.github.comment_author == "12345"
+    assert loaded.config.policy.strict is False
+    assert loaded.config.budget.max_usd == 2.5
+
+
+# --- 常に除外するもの (#203) ---------------------------------------------------------
+
+
+def test_custom_exclude_still_skips_git_and_the_output_directory(tmp_path):
+    (tmp_path / "security-checker.yml").write_text(
+        "version: 1\ntarget:\n  exclude: ['docs/**']\n", encoding="utf-8"
+    )
+    exclude = load_config(tmp_path, environ={}).config.target.exclude
+    assert exclude[0] == "docs/**"
+    assert "**/.git/**" in exclude
+    assert "**/.security-checker/**" in exclude
+    assert "**/node_modules/**" not in exclude  # 既定は置き換える
+
+
+# --- preset の名前で presets の外を読ませない (#211) ---------------------------------
+
+
+def test_a_preset_name_cannot_escape_the_presets_directory(tmp_path):
+    (tmp_path / "evil.yml").write_text("version: 1\n", encoding="utf-8")
+    relative = os.path.relpath(tmp_path / "evil", PRESET_DIR)
+    assert (PRESET_DIR / f"{relative}.yml").is_file()  # 照合しなければ読めてしまう経路
+    with pytest.raises(ConfigError, match="存在しません"):
+        load_config(tmp_path, preset=str(relative), environ={})

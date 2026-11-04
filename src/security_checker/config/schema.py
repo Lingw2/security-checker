@@ -31,10 +31,24 @@ DEFAULT_EXCLUDES = (
 )
 
 
+#: `target.exclude` を書き換えても必ず外すもの. 自分の出力と git の内部を検査対象にしない
+ALWAYS_EXCLUDES = (
+    "**/.git/**",
+    "**/.security-checker/**",
+)
+
+
 class TargetConfig(StrictModel):
     root: str = "."
     mode: Literal["auto", "full", "diff"] = "auto"
+    #: 設定すると既定の一覧を**置き換える** (ALWAYS_EXCLUDES だけは常に足す)
     exclude: list[str] = Field(default_factory=lambda: list(DEFAULT_EXCLUDES))
+
+    @field_validator("exclude")
+    @classmethod
+    def _keep_always_excludes(cls, value: list[str]) -> list[str]:
+        """前回のレポートや .git/ の中身を検査して、自分の出力を指摘しない."""
+        return [*value, *(pattern for pattern in ALWAYS_EXCLUDES if pattern not in value)]
 
 
 class ScannerConfig(StrictModel):
