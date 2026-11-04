@@ -161,7 +161,9 @@ Details: [docs/security-model.md](docs/security-model.md).
 ## Host-audit scripts (contrib/host-audit/)
 
 Standalone, read-only scripts (carried over from v1, independent of the Python package) that audit *your
-machine and workflow* rather than a codebase. Each exits 1 when it finds a problem, so they fit cron or CI.
+machine and workflow* rather than a codebase. Each exits 1 when it finds a problem and 2 when it could not
+check (a required command is missing), so they fit cron or CI. The pre-push hook protects `main` / `master` by
+default; set `git config security-checker.protectedBranches '<regex>'` to change that.
 
 | script | what it checks |
 |---|---|

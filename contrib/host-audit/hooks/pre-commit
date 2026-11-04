@@ -11,15 +11,28 @@ if command -v gitleaks >/dev/null 2>&1; then
   else
     sub=(protect --staged)
   fi
-  if ! gitleaks "${sub[@]}" --exit-code 1 >/dev/null 2>&1; then
+  # 検出は専用の終了コード (99) で返させ、gitleaks 自体のエラー (設定の誤り・git の失敗) と分ける
+  err=$(gitleaks "${sub[@]}" --exit-code 99 2>&1 >/dev/null)
+  rc=$?
+  if [[ $rc -eq 99 ]]; then
     echo "❌ コミットにシークレットが含まれている可能性があります (gitleaks)"
     echo "   詳細: gitleaks ${sub[*]} --verbose"
     echo "   誤検知なら: git commit --no-verify"
     exit 1
+  elif [[ $rc -ne 0 ]]; then
+    echo "❌ gitleaks の実行に失敗しました (終了コード ${rc})。シークレット検査は行われていません"
+    printf '%s\n' "$err" | tail -n 5 | sed 's/^/   /'
+    echo "   gitleaks を直すか、承知のうえで: git commit --no-verify"
+    exit 1
   fi
 else
-  # gitleaks が無い場合の簡易パターン検査
-  if git diff --cached -U0 | grep -E '^\+' | grep -qE 'AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|xox[bp]-[0-9A-Za-z-]{20,}|-----BEGIN .*PRIVATE KEY'; then
+  # gitleaks が無い場合の簡易パターン検査. 検査の範囲が狭いことを知らせる
+  echo "⚠️ gitleaks が見つからないため、既知の形式だけの簡易検査を行います (brew install gitleaks を推奨)" >&2
+  patterns='AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,}'
+  patterns+='|glpat-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{20,}|[sr]k_live_[A-Za-z0-9]{16,}'
+  patterns+='|AIza[0-9A-Za-z_-]{35}|xox[abeprs]-[0-9A-Za-z-]{10,}|npm_[A-Za-z0-9]{36}'
+  patterns+='|-----BEGIN .*PRIVATE KEY'
+  if git diff --cached -U0 | grep -E '^\+' | grep -qE "$patterns"; then
     echo "❌ コミットにシークレットらしき文字列が含まれています"
     echo "   誤検知なら: git commit --no-verify"
     exit 1

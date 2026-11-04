@@ -9,7 +9,11 @@
 # 導入: contrib/host-audit/install_hooks.sh   /   一時的に外す: git push --no-verify
 set -uo pipefail
 
-PROTECTED='^refs/heads/(main|master)$'
+# 保護するブランチ名の正規表現. 既定は main / master。リポジトリごとに変えるなら
+#   git config security-checker.protectedBranches 'main|release/.*'
+# 一時的に変えるなら環境変数 SECURITY_CHECKER_PROTECTED_BRANCHES
+branches="${SECURITY_CHECKER_PROTECTED_BRANCHES:-$(git config --get security-checker.protectedBranches 2>/dev/null)}"
+PROTECTED="^refs/heads/(${branches:-main|master})\$"
 ALL_ZERO='^0+$' # 全ゼロ = ブランチの新規作成 or 削除 (sha1/sha256 どちらでも成立)
 
 status=0

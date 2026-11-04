@@ -8,21 +8,33 @@ PROJECT=""
 DOMAIN=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --domain) DOMAIN="$2"; shift 2 ;;
+    --domain)
+      if [[ $# -lt 2 || -z "${2:-}" || "$2" == --* ]]; then
+        echo "使い方: $0 [検査対象プロジェクトのパス] [--domain example.com]" >&2
+        echo "❌ --domain にはドメイン名が必要です" >&2
+        exit 2
+      fi
+      DOMAIN="$2"; shift 2 ;;
     *) PROJECT="$1"; shift ;;
   esac
 done
 
-total=0; failed=0
-declare -a failures=()
+total=0; failed=0; skipped=0
+declare -a failures=() skips=()
 
 run() { # 名前 コマンド...
   local name="$1"; shift
   total=$((total+1))
   echo ""
   echo "════════ $name ════════"
-  if "$@"; then
+  "$@"
+  local rc=$?
+  if [[ $rc -eq 0 ]]; then
     :
+  elif [[ $rc -eq 2 ]]; then
+    # 検査できなかった (必要なコマンドが無いなど). 「通過」とも「要対応」とも数えない
+    skipped=$((skipped+1))
+    skips+=("$name")
   else
     failed=$((failed+1))
     failures+=("$name")
@@ -47,9 +59,16 @@ fi
 
 echo ""
 echo "══════════════ 総括 ══════════════"
-echo "実行: ${total} 件 / 要対応: ${failed} 件"
+echo "実行: ${total} 件 / 要対応: ${failed} 件 / 未実行: ${skipped} 件"
+if [[ $skipped -gt 0 ]]; then
+  for s in "${skips[@]}"; do echo "  ⚠️ $s (検査できませんでした)"; done
+fi
 if [[ $failed -gt 0 ]]; then
   for f in "${failures[@]}"; do echo "  ❌ $f"; done
   exit 1
+fi
+if [[ $skipped -gt 0 ]]; then
+  echo "⚠️ 検査できなかったチェックがあります (通過とは扱いません)"
+  exit 2
 fi
 echo "✅ すべてのチェックを通過しました"

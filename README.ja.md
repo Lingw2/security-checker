@@ -222,7 +222,12 @@ v1 の入力(`min-score` / `upload-sarif` / `token` / `url`)も受け付けま�
 | `contrib/host-audit/check_updates.sh` | OS/brewの未適用アップデートとバックアップ状態を確認 |
 | `contrib/host-audit/run_all.sh [dir] [--domain d]` | 上記の環境系チェックを一括実行(定期実行向け) |
 
-いずれも問題検出時は exit 1 を返すので、cron や CI に組み込めます。
+いずれも問題検出時は exit 1、必要なコマンドが無いなどで検査できなかったときは exit 2 を返すので、
+cron や CI に組み込めます (`run_all.sh` は exit 2 を「未実行」として通過と区別します)。
+
+pre-push フックが守るブランチは既定で `main` / `master` です。リポジトリごとに
+`git config security-checker.protectedBranches 'main|release/.*'` (または環境変数
+`SECURITY_CHECKER_PROTECTED_BRANCHES`) で正規表現を変えられます。
 
 ### Windows版 (contrib/host-audit/windows/)
 
