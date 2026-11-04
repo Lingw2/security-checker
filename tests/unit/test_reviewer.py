@@ -287,3 +287,37 @@ async def test_concurrent_reviews_trace_their_own_prompts():
         expected = sha256_text(prompts.render_user(task, schema))
         assert outcome.trace is not None
         assert outcome.trace["prompt"]["user_sha256"] == expected
+
+
+def test_local_ollama_reviewers_cost_zero_and_unpriced_ones_are_warned():
+    """ollama_chat は価格表に無ければ 0 (#313). 価格の無い Reviewer は予算の外と警告する (#311)."""
+    from security_checker.config.schema import Config
+    from security_checker.run import build_reviewers
+
+    config = Config.model_validate(
+        {
+            "budget": {"max_usd": 1.0},
+            "reviewers": [
+                {
+                    "name": "local",
+                    "transport": "http",
+                    "dialect": "ollama_chat",
+                    "base_url": "http://127.0.0.1:11434",
+                    "model": "llama",
+                },
+                {
+                    "name": "remote",
+                    "transport": "http",
+                    "dialect": "openai_chat",
+                    "base_url": "http://127.0.0.1:9/v1",
+                    "model": "unknown-model",
+                },
+            ],
+        }
+    )
+    setup = build_reviewers(config, environ={})
+    local, remote = (runtime.reviewer for runtime in setup.runtimes)
+    assert local.price is not None and local.price.input_per_1m == 0.0
+    assert remote.price is None
+    assert any("'remote'" in w and "budget.max_usd" in w for w in setup.warnings)
+    assert not any("'local'" in w for w in setup.warnings)

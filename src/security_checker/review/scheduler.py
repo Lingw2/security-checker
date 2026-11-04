@@ -202,6 +202,9 @@ class ReviewScheduler:
         #: 送信中の呼び出しの見積り. 使用量は応答が返るまで増えないので、並列分をここで数える
         self._reserved_tokens = 0
         self._reserved_usd = 0.0
+        #: 価格の分かる呼び出しの金額の累計 (下限). 合計の usage は 1 件でも価格が分からないと
+        #: 金額が不明になるため、予算の判定にはこちらを使う (#311)
+        self._known_usd = 0.0
         self._budget_warned = False
         self._opinions: Mapping[str, Sequence[PeerOpinion]] | None = None
 
@@ -286,6 +289,8 @@ class ReviewScheduler:
             if outcome.trace:
                 self._result.traces.append(outcome.trace)
             self._result.usage = self._result.usage.merge(outcome.verdict.usage)
+            if outcome.verdict.usage.cost_known:
+                self._known_usd += outcome.verdict.usage.estimated_usd or 0.0
             self._result.calls += 1
         await self._check_budget()
 
@@ -348,7 +353,7 @@ class ReviewScheduler:
             not idle
             and limit_usd is not None
             and price is not None
-            and (usage.estimated_usd or 0.0) + self._reserved_usd + usd > limit_usd
+            and self._known_usd + self._reserved_usd + usd > limit_usd
         ):
             await self._stop_run(f"予算 ${limit_usd} を超える見込みのため止めました")
         if self._stop.is_set():
@@ -485,13 +490,10 @@ class ReviewScheduler:
                 f"トークン上限 {self.budget.max_total_tokens} を超えました "
                 f"(実績 {usage.total_tokens})"
             )
-        if (
-            self.budget.max_usd is not None
-            and usage.estimated_usd is not None
-            and usage.estimated_usd > self.budget.max_usd
-        ):
+        if self.budget.max_usd is not None and self._known_usd > self.budget.max_usd:
             await self._stop_run(
-                f"予算 ${self.budget.max_usd} を超えました (概算 ${usage.estimated_usd:.4f})"
+                f"予算 ${self.budget.max_usd} を超えました "
+                f"(価格の分かる呼び出しだけで概算 ${self._known_usd:.4f})"
             )
 
     async def _stop_run(self, reason: str) -> None:

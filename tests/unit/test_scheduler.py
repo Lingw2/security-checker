@@ -371,3 +371,22 @@ def test_retry_after_reads_seconds_and_http_dates():
     past = format_datetime(datetime.now(UTC) - timedelta(seconds=30), usegmt=True)
     assert _retry_after(header(past)) == 0.0
     assert _retry_after(header("soon")) is None
+
+
+async def test_usd_budget_still_works_with_an_unpriced_reviewer():
+    """価格の分からない Reviewer が混ざっても、分かっている分だけで上限を超えたら止める (#311)."""
+    price = ModelPrice(input_per_1m=1000.0, output_per_1m=1000.0)
+    priced_provider, priced = slow_runtime([verdict_payload()] * 8, price=price)
+    unpriced_provider = SlowProvider([verdict_payload()] * 8)
+    unpriced = build_runtime(
+        Reviewer("r2", unpriced_provider),
+        ReviewerConfig(
+            name="r2", transport="http", dialect="openai_chat", base_url="http://x/v1", model="m"
+        ),
+        default_concurrency=1,
+    )
+    result = await ReviewScheduler(
+        [priced, unpriced], budget=BudgetConfig(max_usd=4.0, max_total_tokens=None)
+    ).run([make_task(i) for i in range(8)])
+    assert "予算" in (result.stopped_reason or "")
+    assert len(priced_provider.requests) < 8

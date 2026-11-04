@@ -44,7 +44,7 @@ from security_checker.models.report import (
 from security_checker.models.task import ReviewTask
 from security_checker.models.verdict import Usage, VerdictStatus
 from security_checker.observability import logging as log
-from security_checker.observability.cost import PriceTable
+from security_checker.observability.cost import ModelPrice, PriceTable
 from security_checker.observability.trace import TraceWriter
 from security_checker.policy.engine import PolicyDecision, evaluate
 from security_checker.policy.score import compute_score
@@ -420,6 +420,21 @@ def smallest_input_limit(setup: ReviewerSetup) -> int | None:
     return min(limits, default=None)
 
 
+def _reviewer_price(reviewer: ReviewerConfig, table: PriceTable) -> ModelPrice | None:
+    """Reviewer の単価. 価格表の明示を優先する.
+
+    - process transport はトークンを実測できないため、価格表があっても金額を出さない。
+      推測した数字を出すより cost: unknown が正しい (§9.7)。
+    - ollama_chat は手元で動くモデルなので、価格表に無ければ 0 とする (設計書の cost: 0) (#313)。
+    """
+    if reviewer.transport == "process":
+        return None
+    price = table.lookup(reviewer.model or "")
+    if price is None and reviewer.dialect == "ollama_chat":
+        return ModelPrice(input_per_1m=0.0, output_per_1m=0.0)
+    return price
+
+
 def build_reviewers(
     config: Config,
     *,
@@ -448,14 +463,18 @@ def build_reviewers(
             max_output_tokens=max_output_tokens,
             timeout_s=float(reviewer_config.timeout_s),
             seed=reviewer_config.seed,
-            # process transport はトークンを実測できないため、価格表があっても
-            # 金額を出さない。推測した数字を出すより cost: unknown が正しい (§9.7)。
-            price=None
-            if reviewer_config.transport == "process"
-            else table.lookup(reviewer_config.model or ""),
+            price=_reviewer_price(reviewer_config, table),
             save_prompts=config.output.save_prompts,
             language=language,
         )
+        if config.budget.max_usd is not None and reviewer.price is None:
+            # 金額の分からない呼び出しは予算に数えられない. 黙って上限の外に置かない (#311)
+            setup.warnings.append(
+                f"reviewer '{reviewer_config.name}': 価格が分からないため、この Reviewer の支出は "
+                f"budget.max_usd (${config.budget.max_usd}) で止まりません。"
+                "pricing.yml に model の単価を書くか、"
+                "budget.max_total_tokens で上限を掛けてください"
+            )
         setup.runtimes.append(
             build_runtime(
                 reviewer,
