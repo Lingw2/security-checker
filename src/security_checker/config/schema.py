@@ -6,10 +6,12 @@
 
 from __future__ import annotations
 
+import re
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from security_checker.language import normalize_language
 from security_checker.models.enums import FindingStatus, Severity
 from security_checker.rules import BUNDLED_PREFIX, bundled_semgrep_rule, bundled_semgrep_rules
 
@@ -292,6 +294,26 @@ class OutputConfig(StrictModel):
     #: レポート本文 (LLM が書く自然言語) の言語. "auto" はロケールから推定する。
     #: 出力形式ごとに訳し直す場所はないため、ここが全形式に効く (設計書 §18)。
     language: str = "auto"
+
+    @field_validator("language")
+    @classmethod
+    def _normalize_language(cls, value: str) -> str:
+        """`AUTO` → `auto`、`en_US` → `en-US`。空は壊れた言語指示になるので拒否する (#220)."""
+        normalized = normalize_language(value)
+        if not normalized:
+            raise ValueError(
+                "output.language が空です。auto か言語タグ (ja・en・zh-Hant など) を書いてください"
+            )
+        if normalized != "auto" and not _LANGUAGE_TAG_RE.fullmatch(normalized):
+            raise ValueError(
+                f"output.language ({value!r}) は言語タグの形 "
+                "(ja・en-US・zh-Hant など) ではありません"
+            )
+        return normalized
+
+
+#: BCP 47 の大まかな形 (主言語 2〜8 文字 + 区切り付きの副タグ). 未知の言語でもこの形なら通す
+_LANGUAGE_TAG_RE = re.compile(r"[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*")
 
 
 class GithubConfig(StrictModel):

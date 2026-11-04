@@ -38,34 +38,70 @@ LANGUAGE_NAMES = {
     "tr": "Turkish",
     "vi": "Vietnamese",
     "zh": "Chinese (中文)",
+    "zh-hans": "Simplified Chinese (简体中文)",
+    "zh-hant": "Traditional Chinese (繁體中文)",
 }
 
 
+def normalize_language(value: str) -> str:
+    """設定値を正規化する. `AUTO` → `auto`、`en_US` → `en-US`。空は呼び出し側で拒否する."""
+    cleaned = value.strip()
+    if cleaned.lower() == AUTO:
+        return AUTO
+    return cleaned.replace("_", "-")
+
+
 def resolve_language(configured: str, environ: Mapping[str, str] | None = None) -> str:
-    """設定値を実際の言語タグに解決する. `auto` のときだけ環境を見る."""
+    """設定値を実際の言語タグに解決する. `auto` のときだけ環境を見る.
+
+    POSIX と同じく、LC_ALL → LC_MESSAGES → LANG のうち**空でない最初の変数**で決める。
+    その値が C / POSIX なら、後ろの変数は見ずに既定 (英語) にする
+    (`LC_ALL=C` を明示したのに `LANG` の言語で書かせない)。
+    """
+    configured = normalize_language(configured)
     if configured != AUTO:
         return configured
     source = environ if environ is not None else os.environ
     for variable in LOCALE_VARS:
-        tag = _tag_from_locale(source.get(variable))
-        if tag is not None:
-            return tag
+        value = source.get(variable)
+        if not value:
+            continue
+        return _tag_from_locale(value) or DEFAULT_LANGUAGE
     return DEFAULT_LANGUAGE
 
 
+#: 中国語の地域 → 文字体系. 地域を捨てると繁体字と簡体字を区別できない (#305)
+_TRADITIONAL_CHINESE_REGIONS = frozenset({"tw", "hk", "mo"})
+#: ロケールの修飾子 (`@latin` など) → 言語タグの文字体系
+_SCRIPT_MODIFIERS = {"latin": "Latn", "cyrillic": "Cyrl", "devanagari": "Deva"}
+
+
 def _tag_from_locale(value: str | None) -> str | None:
-    """`ja_JP.UTF-8` → `ja`. ロケール未設定 (C / POSIX) は不明として扱う."""
+    """`ja_JP.UTF-8` → `ja`、`zh_TW` → `zh-Hant`、`sr_RS@latin` → `sr-Latn`.
+
+    ロケール未設定 (C / POSIX) は不明として扱う。
+    """
     if not value:
         return None
-    head = value.split(".")[0].split("@")[0].strip()
+    base, _, modifier = value.partition("@")
+    head = base.split(".")[0].strip()
     if head.lower() in NEUTRAL_LOCALES:
         return None
-    return head.replace("_", "-").split("-")[0].lower() or None
+    parts = head.replace("_", "-").split("-")
+    language = parts[0].lower()
+    if not language:
+        return None
+    region = parts[1].lower() if len(parts) > 1 else ""
+    if language == "zh":
+        return "zh-Hant" if region in _TRADITIONAL_CHINESE_REGIONS else "zh-Hans"
+    script = _SCRIPT_MODIFIERS.get(modifier.split(".")[0].lower())
+    return f"{language}-{script}" if script else language
 
 
 def language_name(tag: str) -> str:
-    """プロンプトに書く言語名. 未知のタグはタグ自体を使う."""
-    return LANGUAGE_NAMES.get(tag.lower(), tag)
+    """プロンプトに書く言語名. 未知のタグは主言語 (`fr-CA` → French)、それも無ければタグ自体."""
+    lowered = tag.lower()
+    return LANGUAGE_NAMES.get(lowered) or LANGUAGE_NAMES.get(lowered.split("-")[0], tag)
 
 
 def output_language_instruction(tag: str) -> str:

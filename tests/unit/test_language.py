@@ -21,7 +21,10 @@ def test_explicit_setting_ignores_the_environment():
         ("ja_JP.UTF-8", "ja"),
         ("ja", "ja"),
         ("ko_KR.UTF-8", "ko"),
-        ("zh_CN.UTF-8", "zh"),
+        ("zh_CN.UTF-8", "zh-Hans"),
+        ("zh_TW.UTF-8", "zh-Hant"),
+        ("zh_HK", "zh-Hant"),
+        ("sr_RS.UTF-8@latin", "sr-Latn"),
         ("en_US.UTF-8", "en"),
         ("pt_BR@euro", "pt"),
     ],
@@ -81,3 +84,37 @@ def test_repair_prompt_repeats_the_language():
     repair = prompts.render_repair("{}", "エラー", {}, "ja")
     assert "OUTPUT LANGUAGE" in repair
     assert prompts.render_repair("{}", "エラー", {}, "en").count("OUTPUT LANGUAGE") == 0
+
+
+def test_explicit_c_locale_is_not_overridden_by_lang():
+    """空でない最初の変数で決める. LC_ALL=C なら LANG は見ない (#221)."""
+    assert resolve_language("auto", {"LC_ALL": "C", "LANG": "ja_JP.UTF-8"}) == "en"
+    assert resolve_language("auto", {"LC_ALL": "", "LANG": "ja_JP.UTF-8"}) == "ja"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"), [("AUTO", "auto"), (" en_US ", "en-US"), ("ja", "ja")]
+)
+def test_output_language_is_normalized(raw, expected):
+    """設定の値を正規化する (#220)."""
+    from security_checker.config.schema import OutputConfig
+
+    assert OutputConfig(language=raw).language == expected
+
+
+@pytest.mark.parametrize("raw", ["", "   ", "日本語", "en US"])
+def test_broken_output_language_is_rejected(raw):
+    from pydantic import ValidationError
+
+    from security_checker.config.schema import OutputConfig
+
+    with pytest.raises(ValidationError, match=r"output\.language"):
+        OutputConfig(language=raw)
+
+
+def test_traditional_and_simplified_chinese_have_names():
+    from security_checker.language import language_name
+
+    assert "Traditional" in language_name("zh-Hant")
+    assert "Simplified" in language_name("zh-Hans")
+    assert language_name("fr-CA") == "French"

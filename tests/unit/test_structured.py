@@ -132,3 +132,13 @@ def test_evidence_within_context_is_kept():
     checked, warnings = drop_hallucinated_evidence(judgement, make_task())
     assert len(checked.evidence) == 1
     assert warnings == []
+
+
+def test_schema_sent_to_the_llm_has_no_internal_descriptions():
+    """pydantic の docstring (日本語の内部メモ) をプロンプトに送らない (#290)."""
+    import json
+
+    from security_checker.review.structured import verdict_schema
+
+    text = json.dumps(verdict_schema(), ensure_ascii=False)
+    assert '"description"' not in text

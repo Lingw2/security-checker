@@ -47,13 +47,22 @@ def _inline_refs(node: Any, defs: dict[str, Any]) -> Any:
 
 def _harden(node: Any) -> Any:
     if isinstance(node, dict):
-        hardened = {key: _harden(value) for key, value in node.items()}
+        hardened = {
+            # properties の中身はプロパティ名 → スキーマ. 名前そのもの (title など) は消さない
+            key: {name: _harden(sub) for name, sub in value.items()}
+            if key == "properties" and isinstance(value, dict)
+            else _harden(value)
+            for key, value in node.items()
+        }
         if hardened.get("type") == "object" and "properties" in hardened:
             hardened["additionalProperties"] = False
             # strict な json_schema モードでは「全プロパティが required」であることを
             # 求める実装があるため、省略可能な項目も null 許容にしたうえで必須にする。
             hardened["required"] = sorted(hardened["properties"])
         hardened.pop("title", None)
+        # pydantic は docstring を description にする. 内部向けの日本語のメモを
+        # プロンプトの一部として LLM に送らない (送る説明はテンプレートで版管理する) (#290)
+        hardened.pop("description", None)
         return hardened
     if isinstance(node, list):
         return [_harden(item) for item in node]
