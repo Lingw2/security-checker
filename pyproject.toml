@@ -54,12 +54,12 @@ Issues = "https://github.com/Sh1n1230/security-checker/issues"
 [dependency-groups]
 dev = [
   "jsonschema[format-nongpl]>=4.26.0",
-  "mypy>=2.4.0",
-  "pytest>=8",
-  "pytest-asyncio>=0.24",
+  "mypy>=2.4.1",
+  "pytest>=9.2.0",
+  "pytest-asyncio>=1.4.1",
   "pytest-cov>=5",
   "respx>=0.21",
-  "ruff>=0.17.1",
+  "ruff>=0.17.3",
   "syrupy>=6.1.1",
   "types-pyyaml",
 ]
